@@ -30,7 +30,7 @@ function VerdictChip({ size }: { size: number }) {
   );
 }
 
-const ALL_SOURCES: Source[] = ["huggingFace", "hfMirror", "modelScope"];
+const ALL_SOURCES: Source[] = ["modelScope", "huggingFace", "hfMirror"];
 
 export function ModelDetail({
   repo,

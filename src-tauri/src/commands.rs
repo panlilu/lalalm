@@ -268,8 +268,10 @@ pub async fn reveal_path(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         std::process::Command::new("explorer")
             .arg(format!("/select,{path}"))
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -298,7 +300,12 @@ pub async fn open_path(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer").arg(&p).spawn().map_err(|e| e.to_string())?;
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer")
+            .arg(&p)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -328,8 +335,10 @@ pub async fn open_url(url: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         std::process::Command::new("cmd")
             .args(["/C", "start", "", &url])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -349,6 +358,14 @@ pub async fn check_repo_exists(
 ) -> Result<bool, String> {
     let cfg = state.config_clone();
     state.hub().repo_exists(source, &repo, &cfg).await
+}
+
+/// The resolved LM Studio models directory (reads LM Studio's own config).
+#[tauri::command]
+pub fn lm_studio_dir() -> String {
+    crate::config::resolve_lm_studio_dir()
+        .to_string_lossy()
+        .to_string()
 }
 
 #[tauri::command]

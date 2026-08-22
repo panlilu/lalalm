@@ -145,6 +145,7 @@ export interface Aria2Config {
 
 export type ProxyMode = "system" | "direct" | "manual";
 export type DownloadDestination = "library" | "lmStudio";
+export type ThemeMode = "system" | "dark" | "light";
 
 export interface Config {
   source: Source;
@@ -161,6 +162,7 @@ export interface Config {
   proxyMode: ProxyMode;
   proxyUrl: string;
   downloadDestination: DownloadDestination;
+  theme: ThemeMode;
 }
 
 export interface OpResult {

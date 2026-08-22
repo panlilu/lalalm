@@ -54,6 +54,7 @@ export const api = {
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   checkRepoExists: (source: Source, repo: string) =>
     invoke<boolean>("check_repo_exists", { source, repo }),
+  getLmStudioDir: () => invoke<string>("lm_studio_dir"),
   getSysStats: () => invoke<SysStats>("get_sys_stats"),
   getAppVersion: () => invoke<string>("get_app_version"),
 };

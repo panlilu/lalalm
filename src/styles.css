@@ -1,5 +1,6 @@
 /* ============ LalaLM design system ============ */
 :root {
+  color-scheme: dark;
   --bg: #0d0f15;
   --bg-soft: #11141c;
   --panel: #151924;
@@ -16,9 +17,34 @@
   --success: #34d399;
   --warn: #fbbf24;
   --danger: #f87171;
+  --scrollbar: #2a3145;
+  --scrollbar-hover: #384159;
   --radius: 12px;
   --radius-sm: 8px;
   --sidebar-w: 232px;
+}
+
+/* Light theme — applied via `html.light` (see store theme effect). */
+:root.light {
+  color-scheme: light;
+  --bg: #f4f5f8;
+  --bg-soft: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f7f8fb;
+  --panel-3: #eef0f5;
+  --border: #dde0e8;
+  --border-soft: #e7e9ef;
+  --text: #181b22;
+  --muted: #5c6577;
+  --faint: #98a0b3;
+  --accent: #4c6ef5;
+  --accent-2: #0ea5c9;
+  --accent-grad: linear-gradient(135deg, #4c6ef5, #0ea5c9);
+  --success: #0a9d6c;
+  --warn: #c77d0a;
+  --danger: #dc4444;
+  --scrollbar: #ccd0da;
+  --scrollbar-hover: #b4bac8;
 }
 
 * {
@@ -50,12 +76,12 @@ body {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a3145;
+  background: var(--scrollbar);
   border-radius: 6px;
   border: 2px solid var(--bg);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #384159;
+  background: var(--scrollbar-hover);
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -266,14 +292,23 @@ input::placeholder {
 .sysmon-row label {
   display: flex;
   justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
   font-size: 11.5px;
   color: var(--muted);
   margin-bottom: 3px;
+}
+.sysmon-row label span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sysmon-row label b {
   color: var(--text);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .meter {
   height: 4px;

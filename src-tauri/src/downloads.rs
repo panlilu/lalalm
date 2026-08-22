@@ -453,6 +453,7 @@ pub async fn monitor_loop(app: AppHandle) {
 
         let tasks = state.tasks.read().unwrap().clone();
         let _ = app.emit("downloads-changed", &tasks);
+        crate::update_tray_status(&app, &tasks);
 
         if tick % 2 == 0 {
             let stats = crate::stats::collect(&state);

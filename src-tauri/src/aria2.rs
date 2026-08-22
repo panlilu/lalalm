@@ -134,6 +134,10 @@ impl Aria2 {
         cmd.args(args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null());
+        // aria2c is a console app — without this flag a black cmd window
+        // flashes every time the GUI process spawns it on Windows.
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 
         match log_file {
             Some(f) => {

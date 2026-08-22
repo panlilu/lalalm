@@ -110,6 +110,7 @@ export function Discover() {
   const [loading, setLoading] = useState(false);
   const [popOpen, setPopOpen] = useState(false);
   const searchSeq = useRef(0);
+  const lastKeyRef = useRef<string | null>(null);
 
   const effSource = source ?? config?.source ?? "huggingFace";
 
@@ -128,6 +129,9 @@ export function Discover() {
   const doSearch = useCallback(
     async (q: string) => {
       const seq = ++searchSeq.current;
+      // Remember the exact parameter set in flight so redundant effect
+      // triggers (config arriving, remounts) don't double-fire.
+      lastKeyRef.current = `${effSource}|${sort}|${ggufOnly}|${q}`;
       setLoading(true);
       setError(null);
       setQuery(q);
@@ -164,15 +168,19 @@ export function Discover() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config?.source]);
 
-  // Re-run when filters or source change — but not on the first render after
-  // remount, since cached results already match the restored filters.
+  // Re-run whenever the source / filters actually change. No `results`
+  // guard here: switching tabs mid-load MUST cancel-and-restart the
+  // search even when the first request hasn't returned yet (the seq
+  // counter in doSearch discards the stale response).
   const firstFiltersRun = useRef(true);
   useEffect(() => {
     if (firstFiltersRun.current) {
       firstFiltersRun.current = false;
       return;
     }
-    if (results !== null) doSearch(query);
+    const key = `${effSource}|${sort}|${ggufOnly}|${query}`;
+    if (key === lastKeyRef.current) return; // already in flight with these params
+    doSearch(query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sort, ggufOnly, effSource]);
 
@@ -261,7 +269,7 @@ export function Discover() {
       {/* toolbar */}
       <div className="toolbar" style={{ marginTop: 16 }}>
         <div className="seg">
-          {(Object.keys(SOURCE_LABELS) as Source[]).map((s) => (
+          {(["modelScope", "huggingFace", "hfMirror"] as Source[]).map((s) => (
             <button
               key={s}
               className={effSource === s ? "on" : ""}

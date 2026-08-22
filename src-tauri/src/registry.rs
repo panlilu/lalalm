@@ -146,9 +146,15 @@ pub fn list_local_models(cfg: &Config) -> Vec<LocalModel> {
         }
     }
 
-    // 3. LM Studio models (~/.lmstudio/models and legacy ~/.cache/lm-studio).
+    // 3. LM Studio models — resolved from LM Studio's own config
+    //    (downloadsFolder) when present, else the well-known defaults.
     if cfg.scan_lm_studio {
-        for lms in [home.join(".lmstudio/models"), home.join(".cache/lm-studio/models")] {
+        let mut lms_dirs = vec![crate::config::resolve_lm_studio_dir()];
+        let home2 = home.join(".cache/lm-studio/models");
+        if !lms_dirs.contains(&home2) {
+            lms_dirs.push(home2); // legacy location, kept as a courtesy
+        }
+        for lms in lms_dirs {
             if lms.is_dir() {
                 push_entries(
                     ORIGIN_LMS,

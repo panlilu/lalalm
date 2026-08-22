@@ -181,3 +181,39 @@ try {
 } catch (e) {
   console.warn("ico generation skipped:", e.message);
 }
+
+// ---- tray icons: bolt silhouette only, no background ----
+// macOS menu bar wants a black "template" image (system recolors it);
+// Windows uses the colored bolt.
+function renderTray(size, colored) {
+  const rows = [];
+  const step = 1 / size;
+  const SS2 = 12;
+  for (let y = 0; y < size; y++) {
+    const row = Buffer.alloc(1 + size * 4);
+    row[0] = 0;
+    for (let x = 0; x < size; x++) {
+      let hits = 0;
+      for (let sy = 0; sy < SS2; sy++) {
+        for (let sx = 0; sx < SS2; sx++) {
+          const nx = (x + (sx + 0.5) / SS2) * step;
+          const ny = (y + (sy + 0.5) / SS2) * step;
+          if (pointInPoly(nx, ny, BOLT)) hits++;
+        }
+      }
+      const o = 1 + x * 4;
+      if (colored) {
+        const t = clamp01((x / size + y / size) / 2);
+        row[o] = Math.round(lerp(0x6b, 0x06, t));
+        row[o + 1] = Math.round(lerp(0x74, 0xb6, t));
+        row[o + 2] = Math.round(lerp(0xf1, 0xd4, t));
+      }
+      row[o + 3] = Math.round((255 * hits) / (SS2 * SS2));
+    }
+    rows.push(row);
+  }
+  return encodePng(Buffer.concat(rows), size, size);
+}
+writeFileSync("src-tauri/icons/tray-mac.png", renderTray(44, false)); // template @2x
+writeFileSync("src-tauri/icons/tray-win.png", renderTray(32, true));
+console.log("wrote src-tauri/icons/tray-mac.png, tray-win.png");

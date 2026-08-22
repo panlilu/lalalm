@@ -37,15 +37,55 @@ fn store_avatar(author: &str, url: &str) {
         .insert(author.to_string(), url.to_string());
 }
 
-/// Fill in org avatars for HF-family summaries (concurrently, capped,
-/// cached across searches). Failures degrade to the letter fallback.
-async fn fill_hf_avatars(list: &mut [ModelSummary], http: reqwest::Client, base: &'static str) {
+/// Fetch an org avatar from the HF users API (`base` may be huggingface.co
+/// or the hf-mirror — both serve the same accounts). Cached per author.
+/// Example: Qwen →
+/// https://cdn-avatars.huggingface.co/v1/production/uploads/6215ca5692c0ecfba9186921/….jpeg
+async fn fetch_org_avatar(
+    http: &reqwest::Client,
+    base: &'static str,
+    author: &str,
+) -> Option<String> {
+    if let Some(u) = cached_avatar(author) {
+        return Some(u);
+    }
+    if author.is_empty() || author.contains('/') {
+        return None;
+    }
+    let url = format!("{base}/api/users/{}/avatar", crate::config::encode_path(author));
+    let resp = http
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v = resp.json::<Value>().await.ok()?;
+    let u = v["avatarUrl"].as_str()?.to_string();
+    store_avatar(author, &u);
+    Some(u)
+}
+
+/// Fill in org avatars for a result list (concurrently, capped, cached).
+/// Works for HF-family results directly; ModelScope publishers are looked up
+/// by the same account name on HF (most orgs mirror across both hubs).
+async fn fill_org_avatars(list: &mut [ModelSummary], http: reqwest::Client, src: Source) {
+    let base: &'static str = match src {
+        Source::ModelScope => Source::HfMirror.api_base(),
+        _ => src.api_base(),
+    };
     let mut todo: Vec<String> = Vec::new();
     for item in list.iter() {
-        if item.avatar.is_some() || item.author.is_empty() || item.author.contains('/') {
+        if item.avatar.is_some()
+            || item.author.is_empty()
+            || item.author.contains('/')
+            || cached_avatar(&item.author).is_some()
+        {
             continue;
         }
-        if cached_avatar(&item.author).is_none() && !todo.contains(&item.author) {
+        if !todo.contains(&item.author) {
             todo.push(item.author.clone());
             if todo.len() >= 16 {
                 break;
@@ -55,16 +95,7 @@ async fn fill_hf_avatars(list: &mut [ModelSummary], http: reqwest::Client, base:
     let handles = todo.into_iter().map(|author| {
         let http = http.clone();
         tokio::spawn(async move {
-            let url = format!("{base}/api/users/{}/avatar", crate::config::encode_path(&author));
-            if let Ok(resp) = http.get(&url).timeout(std::time::Duration::from_secs(6)).send().await {
-                if resp.status().is_success() {
-                    if let Ok(v) = resp.json::<Value>().await {
-                        if let Some(u) = v["avatarUrl"].as_str() {
-                            store_avatar(&author, u);
-                        }
-                    }
-                }
-            }
+            fetch_org_avatar(&http, base, &author).await;
             author
         })
     });
@@ -325,19 +356,50 @@ pub struct ModelDetail {
     pub all_total_size: u64,
 }
 
+
+/// ModelScope returns update times as unix seconds (number); normalize to
+/// "YYYY-MM-DD" so the frontend's formatter shows a real date.
+fn ms_time_to_string(v: &Value) -> String {
+    if let Some(s) = v.as_str() {
+        return s.to_string();
+    }
+    if let Some(secs) = v.as_i64() {
+        let days = secs.div_euclid(86400);
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = if m <= 2 { y + 1 } else { y };
+        return format!("{y:04}-{m:02}-{d:02}");
+    }
+    String::new()
+}
+
 pub struct HubClient {
+    /// Proxy-aware client (system / manual proxy) — used for HF-family hubs.
     http: reqwest::Client,
+    /// Always-direct client. ModelScope is a China-hosted service; forcing
+    /// it through a system proxy (Clash etc.) breaks requests, so all
+    /// modelscope.cn traffic bypasses the proxy entirely.
+    http_direct: reqwest::Client,
 }
 
 impl Clone for HubClient {
     fn clone(&self) -> Self {
         Self {
             http: self.http.clone(),
+            http_direct: self.http_direct.clone(),
         }
     }
 }
 
 /// Parse the output of `scutil --proxy` and return a proxy URL if enabled.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_scutil_proxy(output: &str) -> Option<String> {
     let mut map = std::collections::HashMap::new();
     for line in output.lines() {
@@ -371,6 +433,7 @@ fn parse_scutil_proxy(output: &str) -> Option<String> {
     None
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn assemble_http_url(host: &Option<String>, port: &Option<String>) -> Option<String> {
     let host = host.as_deref()?.trim().to_string();
     if host.is_empty() || host == "(null)" {
@@ -383,6 +446,7 @@ fn assemble_http_url(host: &Option<String>, port: &Option<String>) -> Option<Str
     Some(format!("http://{host}:{port}"))
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn assemble_socks_url(host: &Option<String>, port: &Option<String>) -> Option<String> {
     let host = host.as_deref()?.trim().to_string();
     if host.is_empty() || host == "(null)" {
@@ -397,6 +461,7 @@ fn assemble_socks_url(host: &Option<String>, port: &Option<String>) -> Option<St
 
 /// Parse `reg query "HKCU\...\Internet Settings"` output for the proxy.
 /// ProxyServer is either "host:port" or a map "http=…;https=…;socks=…".
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn parse_windows_reg_proxy(text: &str) -> Option<String> {
     let mut enabled = false;
     let mut server: Option<String> = None;
@@ -453,13 +518,16 @@ pub fn detect_system_proxy() -> Option<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(out) = std::process::Command::new("reg")
-            .args([
-                "query",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-            ])
-            .output()
+        let mut cmd = std::process::Command::new("reg");
+        cmd.args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        ]);
         {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        if let Ok(out) = cmd.output() {
             let text = String::from_utf8_lossy(&out.stdout).into_owned();
             if let Some(p) = parse_windows_reg_proxy(&text) {
                 return Some(p);
@@ -521,8 +589,16 @@ impl HubClient {
                 }
             }
         }
+        let direct = reqwest::Client::builder()
+            .user_agent("LalaLM/0.1 (+https://github.com/lalalm)")
+            .no_proxy()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(25))
+            .build()
+            .expect("reqwest direct client");
         Self {
             http: b.build().expect("reqwest client"),
+            http_direct: direct,
         }
     }
 
@@ -530,12 +606,17 @@ impl HubClient {
         src.auth_header(cfg)
     }
 
-    async fn get_json(
+    async fn get_json(&self, url: &str, auth: Option<&str>) -> Result<Value, String> {
+        self.get_json_via(&self.http, url, auth).await
+    }
+
+    async fn get_json_via(
         &self,
+        client: &reqwest::Client,
         url: &str,
         auth: Option<&str>,
     ) -> Result<Value, String> {
-        let mut req = self.http.get(url);
+        let mut req = client.get(url);
         if let Some(a) = auth {
             req = req.header("Authorization", a);
         }
@@ -553,7 +634,16 @@ impl HubClient {
     }
 
     async fn get_text(&self, url: &str, auth: Option<&str>) -> Result<String, String> {
-        let mut req = self.http.get(url);
+        self.get_text_via(&self.http, url, auth).await
+    }
+
+    async fn get_text_via(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        auth: Option<&str>,
+    ) -> Result<String, String> {
+        let mut req = client.get(url);
         if let Some(a) = auth {
             req = req.header("Authorization", a);
         }
@@ -581,7 +671,7 @@ impl HubClient {
                 self.search_hf(src, query, sort, gguf_only, limit, cfg).await
             }
             Source::ModelScope => {
-                self.search_ms(query, sort, limit).await
+                self.search_ms(query, sort, limit, gguf_only).await
             }
         }
     }
@@ -617,8 +707,7 @@ impl HubClient {
                         arr.iter().filter_map(|m| hf_summary(m, src)).collect();
                     if !out.is_empty() {
                         let http = self.http.clone();
-                        let base = src.api_base();
-                        fill_hf_avatars(&mut out, http, base).await;
+                        fill_org_avatars(&mut out, http, src).await;
                         return Ok(out);
                     }
                     if arr.is_empty() {
@@ -640,18 +729,34 @@ impl HubClient {
         query: &str,
         _sort: &str,
         limit: u32,
+        gguf_only: bool,
     ) -> Result<Vec<ModelSummary>, String> {
         let q = query.trim();
-        // ModelScope uses the PUT /api/v1/dolphin/models search API
-        // (verified against modelscope.cn; SortBy must be "Default" etc.).
+        // ModelScope uses the PUT /api/v1/dolphin/models search API.
+        // NOTE: the filter key is "Name" — "Query" is silently ignored and
+        // returns the unfiltered full catalog. Space-separated terms are
+        // AND-ed ("qwen2.5 gguf" → only matching GGUF models). SortBy must
+        // stay "Default" (other values are rejected by the API).
+        let name_q = if gguf_only {
+            let lower = q.to_lowercase();
+            if lower.contains("gguf") {
+                q.to_string()
+            } else if q.is_empty() {
+                "gguf".to_string()
+            } else {
+                format!("{q} gguf")
+            }
+        } else {
+            q.to_string()
+        };
         let body = serde_json::json!({
-            "Query": q,
+            "Name": name_q,
             "PageSize": limit,
             "PageNumber": 1,
             "SortBy": "Default",
         });
         let resp = self
-            .http
+            .http_direct
             .put("https://modelscope.cn/api/v1/dolphin/models")
             .json(&body)
             .send()
@@ -667,11 +772,17 @@ impl HubClient {
             .or_else(|| v["Data"]["Models"].as_array())
             .cloned()
             .unwrap_or_default();
-        Ok(models.iter().filter_map(ms_summary).collect())
+        let mut out: Vec<ModelSummary> = models.iter().filter_map(ms_summary).collect();
+        if !out.is_empty() {
+            // ModelScope has no public org-icon API; publishers usually mirror
+            // their HF account, so look the org up by the same name there.
+            let http = self.http.clone();
+            fill_org_avatars(&mut out, http, Source::ModelScope).await;
+        }
+        Ok(out)
     }
 
     // ---------------------------------------------------------------- detail
-
     /// Light-weight check whether `repo` exists on `src`.
     pub async fn repo_exists(
         &self,
@@ -701,7 +812,10 @@ impl HubClient {
                     encode_path(org),
                     encode_path(name)
                 );
-                match self.get_json(&url, auth.as_deref()).await {
+                match self
+                    .get_json_via(&self.http_direct, &url, auth.as_deref())
+                    .await
+                {
                     Ok(v) => Ok(v["Code"].as_i64() == Some(200) && v["Data"].is_object()),
                     Err(_) => Ok(false),
                 }
@@ -776,7 +890,12 @@ impl HubClient {
             .await
             .ok();
 
-        let summary = hf_summary(&info, src).ok_or("模型信息解析失败")?;
+        let mut summary = hf_summary(&info, src).ok_or("模型信息解析失败")?;
+        // Org icon for the detail hero (same lookup as the search grid).
+        if summary.avatar.is_none() {
+            summary.avatar =
+                fetch_org_avatar(&self.http, src.api_base(), &summary.author).await;
+        }
         Ok(finalize_detail(summary, files, readme_md))
     }
 
@@ -793,7 +912,7 @@ impl HubClient {
             enc_repo
         );
         let tree = self
-            .get_json(&files_url, auth.as_deref())
+            .get_json_via(&self.http_direct, &files_url, auth.as_deref())
             .await
             .map_err(|e| format!("获取文件列表失败: {e}"))?;
 
@@ -817,7 +936,8 @@ impl HubClient {
         files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
 
         let readme_md = self
-            .get_text(
+            .get_text_via(
+                &self.http_direct,
                 &format!("https://modelscope.cn/models/{enc_repo}/resolve/master/README.md"),
                 auth.as_deref(),
             )
@@ -840,21 +960,21 @@ impl HubClient {
             avatar: None,
         };
         let info_url = format!("https://modelscope.cn/api/v1/models/{}", enc_repo);
-        if let Ok(v) = self.get_json(&info_url, auth.as_deref()).await {
+        if let Ok(v) = self
+            .get_json_via(&self.http_direct, &info_url, auth.as_deref())
+            .await
+        {
             let d = &v["Data"];
             summary.downloads = d["Downloads"].as_u64().unwrap_or(0);
             summary.likes = d["Likes"].as_u64().or(d["Stars"].as_u64()).unwrap_or(0);
-            summary.last_modified = d["LastUpdatedTime"]
-                .as_str()
-                .or(d["CreateTime"].as_str())
-                .unwrap_or("")
-                .to_string();
-            if summary.avatar.is_none() {
-                summary.avatar = d["Avatar"]
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .filter(|s| !s.is_empty());
-            }
+            summary.last_modified = {
+                let t = ms_time_to_string(&d["LastUpdatedTime"]);
+                if t.is_empty() {
+                    ms_time_to_string(&d["CreateTime"])
+                } else {
+                    t
+                }
+            };
             summary.tags = d["Tags"]
                 .as_array()
                 .map(|a| {
@@ -863,6 +983,13 @@ impl HubClient {
                         .collect()
                 })
                 .unwrap_or_default();
+        }
+        if summary.avatar.is_none() {
+            // ModelScope has no public org-icon API; try the same publisher
+            // name on the HF mirror (most orgs mirror across hubs).
+            let author = summary.author.clone();
+            summary.avatar =
+                fetch_org_avatar(&self.http, Source::HfMirror.api_base(), &author).await;
         }
         Ok(finalize_detail(summary, files, readme_md))
     }
@@ -950,15 +1077,24 @@ fn ms_summary(m: &Value) -> Option<ModelSummary> {
         author: path.to_string(),
         name: name.to_string(),
         source: Source::ModelScope,
-        avatar: m["Avatar"].as_str().map(|s| s.to_string()).filter(|s| !s.is_empty()),
+        // NOTE: the list API's "Avatar" is the model's own cover image, not
+        // the publisher org icon — leave it unset (letter fallback instead).
+        avatar: None,
         downloads: m["Downloads"].as_u64().unwrap_or(0),
         likes: m["Likes"].as_u64().or(m["Stars"].as_u64()).unwrap_or(0),
-        last_modified: m["LastUpdatedTime"]
-            .as_str()
-            .or(m["UpdateTime"].as_str())
-            .or(m["CreatedAt"].as_str())
-            .unwrap_or("")
-            .to_string(),
+        last_modified: {
+            let t = ms_time_to_string(&m["LastUpdatedTime"]);
+            if t.is_empty() {
+                let t2 = ms_time_to_string(&m["UpdateTime"]);
+                if t2.is_empty() {
+                    ms_time_to_string(&m["CreatedAt"])
+                } else {
+                    t2
+                }
+            } else {
+                t
+            }
+        },
         pipeline_tag: m["Tasks"]
             .as_array()
             .and_then(|a| a.first())

@@ -46,7 +46,12 @@ function SysMon({ stats }: { stats?: SysStats }) {
       : stats.vramTotal
         ? formatBytes(stats.vramTotal)
         : "—";
-  const gpuName = stats.gpuName ?? (stats.platform === "macos" ? "GPU" : "GPU");
+  const gpuName = (stats.gpuName ?? "GPU")
+    // Shorten vendor prefixes so long names fit the sidebar row.
+    .replace(/^NVIDIA\s+GeForce\s+/i, "")
+    .replace(/^NVIDIA\s+/i, "")
+    .replace(/^AMD\s+(Radeon(\(TM\))?\s*)/i, "")
+    .replace(/^Intel(R)?\s+/i, "");
   return (
     <div className="sysmon">
       <div className="sysmon-title">

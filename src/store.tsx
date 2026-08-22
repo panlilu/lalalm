@@ -64,6 +64,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [sysStats, setSysStats] = useState<SysStats | undefined>();
   const [toasts, setToasts] = useState<Toast[]>([]);
   const mounted = useRef(false);
+  const navRef = useRef<(r: Route) => void>(() => {});
 
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = toastSeq++;
@@ -82,6 +83,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Theme: "system" tracks the OS appearance live; dark/light are forced.
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const t = config?.theme ?? "system";
+      const light = t === "light" || (t === "system" && !mq.matches);
+      document.documentElement.classList.toggle("light", light);
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [config?.theme]);
+
   useEffect(() => {
     if (mounted.current) return;
     mounted.current = true;
@@ -91,12 +105,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setDownloads(e.payload ?? [])
     );
     const un2 = listen<SysStats>("sys-stats", (e) => setSysStats(e.payload));
+    // Tray menu deep-links (e.g. 下载任务 → downloads page).
+    const un3 = listen<string>("navigate", (e) => {
+      const page = e.payload;
+      if (page === "downloads") navRef.current({ page: "downloads" });
+    });
     api.listDownloads().then(setDownloads).catch(() => {});
     api.getSysStats().then(setSysStats).catch(() => {});
 
     return () => {
       un1.then((f) => f());
       un2.then((f) => f());
+      un3.then((f) => f());
     };
   }, [reloadConfig]);
 
@@ -107,6 +127,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
     [route]
   );
+  // Tray menu events fire before/after renders; always call the latest nav.
+  navRef.current = nav;
 
   const store: Store = {
     route,

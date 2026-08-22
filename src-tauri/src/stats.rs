@@ -95,6 +95,71 @@ fn disk_for(disks: &sysinfo::Disks, dir: &std::path::Path) -> (u64, u64) {
     }
 }
 
+/// Heuristic: does this adapter name belong to a virtual / software / helper
+/// display device rather than a physical GPU?
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn gpu_name_is_virtual(name: &str) -> bool {
+    const MARKERS: [&str; 12] = [
+        "virtual",
+        "dummy",
+        "indirect",
+        "basic display",
+        "basicrender",
+        "基本显示",
+        "vmware",
+        "virtualbox",
+        "vbox",
+        "hyper-v",
+        "qxl",
+        "parsec",
+    ];
+    let l = name.to_lowercase();
+    MARKERS.iter().any(|m| l.contains(m))
+}
+
+/// Windows-only CIM fallback when the registry enumeration yields nothing.
+#[cfg(target_os = "windows")]
+fn fall_back_to_cim_gpu() -> GpuInfo {
+    use std::os::windows::process::CommandExt;
+    let mut ps = std::process::Command::new("powershell");
+    ps.args([
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_VideoController | ForEach-Object { \"$($_.Name)|$($_.AdapterRAM)\" }",
+    ]);
+    ps.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let out = ps
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let mut best: Option<(String, u64)> = None;
+    for line in out.lines() {
+        let line = line.trim();
+        if let Some((n, r)) = line.split_once('|') {
+            if gpu_name_is_virtual(n) {
+                continue;
+            }
+            let vram = r.trim().parse::<u64>().unwrap_or(0);
+            if best.as_ref().map(|(_, b)| vram > *b).unwrap_or(true) {
+                best = Some((n.trim().to_string(), vram));
+            }
+        }
+    }
+    match best {
+        Some((name, vram)) => GpuInfo {
+            name: Some(name),
+            vram_total: if vram > 0 { Some(vram) } else { None },
+            unified: false,
+        },
+        None => GpuInfo {
+            name: None,
+            vram_total: None,
+            unified: false,
+        },
+    }
+}
+
 /// Probe GPU/VRAM info once at startup (runs on a blocking thread).
 pub fn probe_gpu() -> GpuInfo {
     #[cfg(target_os = "macos")]
@@ -131,21 +196,126 @@ pub fn probe_gpu() -> GpuInfo {
     }
     #[cfg(target_os = "windows")]
     {
-        let name = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "(Get-CimInstance Win32_VideoController | Select-Object -First 1).Name",
-            ])
+        use std::os::windows::process::CommandExt;
+        const NO_WINDOW: u32 = 0x0800_0000; // CREATE_NO_WINDOW
+        const DISPLAY_CLASS: &str =
+            r"HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+
+        fn reg_query(key: &str, value: &str) -> Option<String> {
+            use std::os::windows::process::CommandExt;
+            let mut cmd = std::process::Command::new("reg");
+            cmd.args(["query", key, "/v", value]);
+            cmd.creation_flags(NO_WINDOW);
+            let out = cmd.output().ok()?;
+            let text = String::from_utf8_lossy(&out.stdout).into_owned();
+            // Line shape: "    DriverDesc    REG_SZ    NVIDIA GeForce RTX 4090"
+            //              "    ...qpMemorySize    REG_QWORD    0x180000000"
+            let line = text
+                .lines()
+                .find(|l| l.trim_start().starts_with(value))?;
+            let mut it = line.split_whitespace();
+            let _name = it.next()?;
+            let _type = it.next()?; // REG_SZ / REG_QWORD
+            let rest = it.collect::<Vec<_>>().join(" ");
+            if rest.is_empty() {
+                None
+            } else {
+                Some(rest)
+            }
+        }
+
+        // 0) nvidia-smi (ships with the NVIDIA driver) reports the true VRAM
+        //    even for modded cards (>4 GB) where CIM truncates and some
+        //    drivers leave the registry QWORD empty. Preferred when present.
+        let mut smi = std::process::Command::new("nvidia-smi");
+        smi.args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ]);
+        smi.creation_flags(NO_WINDOW);
+        if let Ok(out) = smi.output() {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout).into_owned();
+                let mut best: Option<(String, u64)> = None; // (name, MiB)
+                for line in text.lines() {
+                    let line = line.trim();
+                    if let Some((n, mib)) = line.rsplit_once(',') {
+                        let name = n.trim().to_string();
+                        if gpu_name_is_virtual(&name) {
+                            continue;
+                        }
+                        let mib: u64 = mib.trim().parse().unwrap_or(0);
+                        if mib > 0 && best.as_ref().map(|(_, b)| mib > *b).unwrap_or(true) {
+                            best = Some((name, mib));
+                        }
+                    }
+                }
+                if let Some((name, mib)) = best {
+                    return GpuInfo {
+                        name: Some(name),
+                        vram_total: Some(mib * 1024 * 1024),
+                        unified: false,
+                    };
+                }
+            }
+        }
+
+        // Enumerate every adapter under the display class (0000, 0001, …).
+        let mut cmd = std::process::Command::new("reg");
+        cmd.args(["query", DISPLAY_CLASS]);
+        cmd.creation_flags(NO_WINDOW);
+        let listing = cmd
             .output()
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("null"));
-        return GpuInfo {
-            name,
-            vram_total: None,
-            unified: false,
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        let subkeys: Vec<String> = listing
+            .lines()
+            .filter_map(|l| l.split_whitespace().last().map(|s| s.to_string()))
+            .filter(|t| t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()))
+            .collect();
+
+        struct Adapter {
+            name: Option<String>,
+            vram: Option<u64>,
+        }
+        let mut adapters: Vec<Adapter> = Vec::new();
+        for sk in &subkeys {
+            let key = format!("{DISPLAY_CLASS}\\{sk}");
+            let name = reg_query(&key, "DriverDesc").filter(|s| !s.is_empty());
+            let vram = reg_query(&key, "HardwareInformation.qpMemorySize")
+                .and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+                .filter(|&b| b > 0);
+            if name.is_some() || vram.is_some() {
+                adapters.push(Adapter { name, vram });
+            }
+        }
+
+        // Skip virtual / software / helper display adapters — they otherwise
+        // shadow the real GPU (e.g. "SudoMaker Virtual Display Adapter").
+        let physical: Vec<&Adapter> = adapters
+            .iter()
+            .filter(|a| {
+                a.name
+                    .as_deref()
+                    .map(|n| !gpu_name_is_virtual(n))
+                    .unwrap_or(false)
+            })
+            .collect();
+        let pool: Vec<&Adapter> = if physical.is_empty() {
+            adapters.iter().collect()
+        } else {
+            physical
         };
+        // The real GPU is the one with the most memory (dGPU over iGPU).
+        pool.iter()
+            .max_by_key(|a| a.vram.unwrap_or(0))
+            .map(|a| GpuInfo {
+                name: a.name.clone(),
+                vram_total: a.vram,
+                unified: false,
+            })
+            .unwrap_or_else(|| fall_back_to_cim_gpu())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -172,4 +342,22 @@ fn parse_size_str(s: &str) -> Option<u64> {
         _ => 1.0,
     };
     Some((num * mult) as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_virtual_adapters() {
+        assert!(gpu_name_is_virtual("SudoMaker Virtual Display Adapter"));
+        assert!(gpu_name_is_virtual("Microsoft Basic Display Adapter"));
+        assert!(gpu_name_is_virtual("Microsoft 基本显示适配器"));
+        assert!(gpu_name_is_virtual("VMware SVGA 3D"));
+        assert!(gpu_name_is_virtual("Indirect Display Driver Sample"));
+        // Real GPUs must NOT be flagged.
+        assert!(!gpu_name_is_virtual("NVIDIA GeForce RTX 4090"));
+        assert!(!gpu_name_is_virtual("AMD Radeon RX 7900 XTX"));
+        assert!(!gpu_name_is_virtual("Intel(R) Arc(TM) A770 Graphics"));
+    }
 }

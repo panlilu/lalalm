@@ -8,11 +8,16 @@ export function Settings() {
   const { config, toast, sysStats, reloadConfig } = useStore();
   const [draft, setDraft] = useState<Config | null>(null);
   const [saving, setSaving] = useState(false);
+  const [lmsDir, setLmsDir] = useState<string | null>(null);
 
   useEffect(() => {
     if (config && draft === null) setDraft(structuredClone(config));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
+
+  useEffect(() => {
+    api.getLmStudioDir().then(setLmsDir).catch(() => {});
+  }, []);
 
   if (!draft) {
     return (
@@ -25,6 +30,18 @@ export function Settings() {
 
   const patch = (p: Partial<Config>) => setDraft({ ...draft, ...p });
   const dirty = JSON.stringify(draft) !== JSON.stringify(config);
+
+  /** Persist a full config snapshot right now (used for instant-apply fields). */
+  const persist = async (snapshot: Config) => {
+    try {
+      const saved = await api.saveConfig(snapshot);
+      setDraft(structuredClone(saved));
+      await reloadConfig();
+      toast("已保存", "success");
+    } catch (e) {
+      toast(`保存失败：${String(e)}`, "error");
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -52,6 +69,35 @@ export function Settings() {
             {saving ? "保存中…" : "保存设置"}
           </button>
         )}
+      </div>
+
+      {/* appearance */}
+      <div className="card settings-section">
+        <h3>外观</h3>
+        <div className="desc">深色 / 浅色主题。「跟随系统」会在系统切换外观时实时联动。</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          {(
+            [
+              ["system", "跟随系统", "与操作系统外观保持一致"],
+              ["dark", "深色", "默认深色主题"],
+              ["light", "浅色", "明亮主题"],
+            ] as const
+          ).map(([m, label, hint]) => (
+            <button
+              key={m}
+              className={`source-radio${(draft.theme ?? "system") === m ? " on" : ""}`}
+              onClick={async () => {
+                if (draft.theme === m) return;
+                const next = { ...draft, theme: m };
+                setDraft(next);
+                await persist(next);
+              }}
+            >
+              <b>{label}</b>
+              <span>{hint}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* download source */}
@@ -154,7 +200,10 @@ export function Settings() {
             onClick={() => patch({ downloadDestination: "lmStudio" })}
           >
             <b>LM Studio 目录</b>
-            <span>~/.lmstudio/models · 自动开启该目录扫描</span>
+            <span>
+              {lmsDir || "~/.lmstudio/models"} · 已读取 LM Studio 配置 ·
+              自动开启该目录扫描
+            </span>
           </button>
         </div>
         {draft.downloadDestination === "library" && (
@@ -309,9 +358,11 @@ export function Settings() {
               <button
                 className="btn-icon"
                 title="移除"
-                onClick={() =>
-                  patch({ searchPaths: draft.searchPaths.filter((x) => x !== p) })
-                }
+                onClick={async () => {
+                  const next = draft.searchPaths.filter((x) => x !== p);
+                  setDraft({ ...draft, searchPaths: next });
+                  await persist({ ...draft, searchPaths: next });
+                }}
               >
                 ✕
               </button>
@@ -324,7 +375,9 @@ export function Settings() {
           onClick={async () => {
             const dir = await api.pickFolder();
             if (dir && !draft.searchPaths.includes(dir)) {
-              patch({ searchPaths: [...draft.searchPaths, dir] });
+              const next = [...draft.searchPaths, dir];
+              setDraft({ ...draft, searchPaths: next });
+              await persist({ ...draft, searchPaths: next });
             }
           }}
         >
