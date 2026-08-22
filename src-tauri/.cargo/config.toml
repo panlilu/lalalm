@@ -1,0 +1,5 @@
+# Cross-compilation: build Windows binaries from macOS/Linux via mingw-w64.
+# (macOS native builds are unaffected — this only applies to the gnu target.)
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"

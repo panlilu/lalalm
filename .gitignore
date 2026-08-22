@@ -1,0 +1,20 @@
+# frontend
+node_modules
+dist
+
+# tauri / rust
+src-tauri/target
+src-tauri/gen
+
+# misc
+.DS_Store
+*.log
+
+# local cargo cache
+.cache/
+
+# aria2 build workspace
+.aria2-build/
+
+# pnpm local store
+.pnpm-store/
