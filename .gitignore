@@ -18,3 +18,6 @@ src-tauri/gen
 
 # pnpm local store
 .pnpm-store/
+
+# aria2c sidecars — fetched at build time (scripts/ensure-sidecars.mjs)
+src-tauri/binaries/

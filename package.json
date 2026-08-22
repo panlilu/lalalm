@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "icon": "node scripts/gen-icon.mjs",
-    "fetch:aria2": "bash scripts/fetch-aria2.sh"
+    "fetch:aria2": "node scripts/ensure-sidecars.mjs",
+    "fetch:aria2:force": "node scripts/ensure-sidecars.mjs --force"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",

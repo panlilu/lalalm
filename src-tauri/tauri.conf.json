@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.lalalm.app",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "node scripts/ensure-sidecars.mjs && pnpm dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "node scripts/ensure-sidecars.mjs && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {

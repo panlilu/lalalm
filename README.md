@@ -42,8 +42,7 @@
 
 ```bash
 pnpm install          # 安装前端依赖
-pnpm fetch:aria2      # 构建内置 aria2c（仅首次，见下方说明）
-pnpm tauri dev        # 开发运行（自动启动 Vite + 应用，支持热更新）
+pnpm tauri dev        # 开发运行（首次会自动下载/构建 aria2c sidecar）
 pnpm tauri build      # 打包 .app / .dmg
 ```
 
@@ -56,26 +55,28 @@ pnpm tauri build      # 打包 .app / .dmg
 
 ### 内置 aria2c 说明
 
-`scripts/fetch-aria2.sh` 会从源码构建 aria2c 1.37.0（使用 Apple TLS，不依赖任何第三方动态库，
-产物只链接 macOS 系统库），输出到 `src-tauri/binaries/aria2c-{target-triple}`，
-由 Tauri `externalBin` 机制打包进 `.app/Contents/MacOS/`。运行时若找不到内置二进制，
-会回退使用系统 PATH 中的 aria2c（便于开发调试）。
+aria2c sidecar **不入库**：`tauri dev` / `tauri build` 的前置命令会执行
+`node scripts/ensure-sidecars.mjs`，按当前平台自动获取并缓存到 `src-tauri/binaries/`
+（已 gitignore）：
 
-Windows 支持预留：脚本支持 `WINDOWS=1 bash scripts/fetch-aria2.sh` 预先下载静态版
-aria2c（abcfy2 静态构建），Tauri 代码已做跨平台路径处理，后续可平滑适配。
+- macOS：从源码构建 1.37.0（Apple TLS，无第三方动态库依赖，仅首次较慢）
+- Windows：下载 abcfy2 静态构建，同时产出 msvc / gnu 两个命名副本
+
+也可手动触发：`pnpm fetch:aria2`（加 `--force` 强制重新获取）。运行时若找不到内置
+二进制，会回退使用系统 PATH 中的 aria2c。
 
 ### Windows 版本
 
 代码已全平台适配：系统代理走注册表（`HKCU\...\Internet Settings` 的 ProxyEnable /
-ProxyServer），GPU 名称经 PowerShell CIM 探测，文件管理器用 `explorer`，图标为
+ProxyServer），GPU 型号与显存经 nvidia-smi → 注册表 → CIM 三级探测（过滤虚拟显示适配器），
+文件管理器用 `explorer`，图标为
 `icons/icon.ico`（256/48/32/16 多尺寸），aria2c 使用官方静态 win64 构建
 （`src-tauri/binaries/aria2c-x86_64-pc-windows-msvc.exe`，已随仓库准备）。
 
-在 Windows 机器上本地构建：
+在 Windows 机器上本地构建（sidecar 会由前置命令自动下载）：
 
 ```powershell
 pnpm install
-bash scripts/fetch-aria2.sh        # Git Bash 下自动下载 Windows 版 aria2c
 pnpm tauri build --bundles nsis    # 产出 NSIS 安装程序
 # → src-tauri/target/release/bundle/nsis/LalaLM_0.1.0_x64-setup.exe
 ```

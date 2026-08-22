@@ -88,24 +88,29 @@ fetch_windows() {
   dest="$BIN_DIR/aria2c-x86_64-pc-windows-msvc.exe"
   if [[ -f "$dest" && "$FORCE" != "--force" ]]; then
     echo "[fetch-aria2] already present: $dest"
-    return 0
+  else
+    zip="$ROOT/.aria2-build/aria2-win-x64.zip"
+    mkdir -p "$(dirname "$zip")"
+    url="https://github.com/abcfy2/aria2-static-build/releases/download/continuous/aria2-x86_64-w64-mingw32_static.zip"
+    echo "[fetch-aria2] downloading windows static build..."
+    curl -fL --retry 3 -o "$zip" "$url"
+    rm -rf "$ROOT/.aria2-build/win-x64"
+    mkdir -p "$ROOT/.aria2-build/win-x64"
+    unzip -o -q "$zip" -d "$ROOT/.aria2-build/win-x64"
+    find "$ROOT/.aria2-build/win-x64" -name 'aria2c.exe' -exec cp {} "$dest" \;
+    echo "[fetch-aria2] saved: $dest"
   fi
-  zip="$ROOT/.aria2-build/aria2-win-x64.zip"
-  mkdir -p "$(dirname "$zip")"
-  url="https://github.com/abcfy2/aria2-static-build/releases/download/continuous/aria2-x86_64-w64-mingw32_static.zip"
-  echo "[fetch-aria2] downloading windows static build..."
-  curl -fL --retry 3 -o "$zip" "$url"
-  rm -rf "$ROOT/.aria2-build/win-x64"
-  mkdir -p "$ROOT/.aria2-build/win-x64"
-  unzip -o -q "$zip" -d "$ROOT/.aria2-build/win-x64"
-  find "$ROOT/.aria2-build/win-x64" -name 'aria2c.exe' -exec cp {} "$dest" \;
-  echo "[fetch-aria2] saved: $dest"
+  # The mingw static binary also serves the gnu target used when
+  # cross-compiling from macOS/Linux — keep both names in place.
+  cp -f "$dest" "$BIN_DIR/aria2c-x86_64-pc-windows-gnu.exe"
 }
 
 case "$(uname -s)" in
   Darwin)
     build_macos
-    [[ "${WINDOWS:-0}" == "1" ]] && fetch_windows
+    if [[ "${WINDOWS:-0}" == "1" ]]; then
+      fetch_windows
+    fi
     ;;
   MINGW*|MSYS*|CYGWIN*)
     fetch_windows
