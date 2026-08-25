@@ -1,4 +1,5 @@
 // Small formatting helpers shared across pages.
+import type { ModelSummary } from "./types";
 
 export function formatBytes(n?: number | null, digits = 1): string {
   if (n === undefined || n === null || isNaN(n)) return "—";
@@ -142,4 +143,90 @@ const SOURCE_HOME: Record<string, string> = {
 /** Web page of a model on its hub. */
 export function repoWebUrl(source: string, repo: string): string {
   return `${SOURCE_HOME[source] ?? SOURCE_HOME.huggingFace}/${repo}`;
+}
+
+// ---------------------------------------------------------------- grouping
+// Collapse the many publisher variants of one model (GGUF / AWQ / MLX /
+// Uncensored / Raw / official weights) into a single canonical identity.
+
+const VARIANT_MARKERS: RegExp =
+  /^(gguf|awq|gptq|nvfp4|mxfp4|fp8|fp4|fp16|bf16|f16|f32|int4|int8|[1-8]bit|mlx|mlu|mtp|qat|optiq|spark|raw|uncensored|abliterated|obliterated|ablit|heretic|unholy|dolphin)$/i;
+
+/** Strip variant markers from a model file name to get its family name.
+ *  "Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF" → "Qwen3.8-27B"
+ *  "Ornith-1.5-35B-A3B-GGUF"                             → "Ornith-1.5-35B-A3B"
+ *  "gemma-4-31B-it-uncensored-heretic-GGUF"              → "gemma-4-31B-it" */
+export function canonicalModelName(repoName: string): string {
+  const tokens = repoName.trim().split("-");
+  const out: string[] = [];
+  for (const tok of tokens) {
+    if (VARIANT_MARKERS.test(tok)) break;
+    // quant bits like "4bit"/"6.5bit" already covered; also bare "27b" is
+    // kept because it is part of the model size, not a marker.
+    out.push(tok);
+  }
+  return out.join("-") || repoName;
+}
+
+export type VariantKind =
+  | "official"
+  | "gguf"
+  | "quant"
+  | "mlx"
+  | "uncensored"
+  | "raw"
+  | "tuned"
+  | "other";
+
+export function classifyVariant(repoName: string): VariantKind {
+  const toks = repoName.toLowerCase().split("-");
+  if (toks.some((t) => /uncensor|abliterat|obliterat|heretic|unholy|dolphin/.test(t)))
+    return "uncensored";
+  if (toks.includes("raw")) return "raw";
+  if (toks.includes("gguf")) return "gguf";
+  if (toks.includes("mlx")) return "mlx";
+  if (toks.some((t) => /^(awq|gptq|nvfp4|mxfp4|fp8|fp4|int4|int8|[1-8]bit)$/.test(t)))
+    return "quant";
+  if (toks.some((t) => /^(mtp|qat|optiq|spark)$/.test(t))) return "tuned";
+  return "other";
+}
+
+export const VARIANT_META: Record<VariantKind, { label: string; cls: string }> = {
+  official: { label: "原始权重", cls: "badge badge-green" },
+  gguf: { label: "GGUF", cls: "badge badge-cyan" },
+  mlx: { label: "MLX", cls: "badge badge-accent" },
+  quant: { label: "量化", cls: "badge" },
+  uncensored: { label: "破限", cls: "badge badge-red" },
+  raw: { label: "Raw", cls: "badge badge-warn" },
+  tuned: { label: "调优版", cls: "badge" },
+  other: { label: "其他版本", cls: "badge" },
+};
+
+export interface ModelGroup {
+  key: string;
+  members: ModelSummary[];
+}
+
+export function groupModels(results: ModelSummary[]): ModelGroup[] {
+  const map = new Map<string, ModelSummary[]>();
+  for (const m of results) {
+    const key = canonicalModelName(m.name).toLowerCase();
+    const list = map.get(key);
+    if (list) list.push(m);
+    else map.set(key, [m]);
+  }
+  const groups: ModelGroup[] = [...map.entries()]
+    .filter(([, ms]) => ms.length > 0)
+    .map(([key, members]) => ({
+      key,
+      members: [...members].sort(
+        (a, b) => b.downloads - a.downloads || a.repo.localeCompare(b.repo)
+      ),
+    }));
+  groups.sort((a, b) => {
+    const da = Math.max(...a.members.map((m) => m.downloads));
+    const db = Math.max(...b.members.map((m) => m.downloads));
+    return db - da;
+  });
+  return groups;
 }

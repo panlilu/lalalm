@@ -153,6 +153,8 @@ export interface RecommendedItem {
   category: string;
   note: string;
   tags: string[];
+  /** Only shown on this platform, e.g. "macos" for MLX builds. */
+  platform?: string | null;
 }
 
 export interface Config {

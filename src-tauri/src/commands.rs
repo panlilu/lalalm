@@ -409,6 +409,9 @@ pub struct RecommendedItem {
     pub note: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Restrict visibility to a platform, e.g. "macos" (Apple MLX entries).
+    #[serde(default)]
+    pub platform: Option<String>,
 }
 
 #[tauri::command]
