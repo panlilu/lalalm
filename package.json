@@ -1,7 +1,7 @@
 {
   "name": "lalalm",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "LalaLM — local LLM model center & downloader",
   "type": "module",
   "scripts": {
