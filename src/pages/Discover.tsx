@@ -143,12 +143,34 @@ function VariantGroupCard({
 function RecCard({ item, onOpen }: { item: RecommendedItem; onOpen: () => void }) {
   const name = item.repo.split("/").pop() ?? item.repo;
   const author = item.repo.split("/")[0] ?? "";
+  const [avatar, setAvatar] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setAvatar(null);
+    api
+      .getOrgAvatar(item.source, author)
+      .then((u) => alive && setAvatar(u))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [item.source, author]);
   return (
     <div className="model-card" onClick={onOpen}>
       <div className="mc-head">
-        <div className="mc-avatar" style={{ background: avatarGradient(item.repo) }}>
-          {name.charAt(0)}
-        </div>
+        {avatar ? (
+          <img
+            className="mc-avatar"
+            src={avatar}
+            alt=""
+            referrerPolicy="no-referrer"
+            onError={() => setAvatar(null)}
+          />
+        ) : (
+          <div className="mc-avatar" style={{ background: avatarGradient(item.repo) }}>
+            {name.charAt(0)}
+          </div>
+        )}
         <div style={{ minWidth: 0 }}>
           <div className="mc-name">{name}</div>
           <div className="mc-author">{author}</div>

@@ -206,6 +206,7 @@ fn main() {
             commands::lm_studio_dir,
             commands::read_aria2_log,
             commands::get_recommended,
+            commands::get_org_avatar,
             commands::get_app_version,
         ])
         .build(tauri::generate_context!())

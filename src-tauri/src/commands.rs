@@ -360,6 +360,17 @@ pub async fn check_repo_exists(
     state.hub().repo_exists(source, &repo, &cfg).await
 }
 
+/// Org/user avatar URL for a publisher (used by recommendation cards).
+#[tauri::command]
+pub async fn get_org_avatar(
+    state: State<'_, AppState>,
+    source: Source,
+    author: String,
+) -> Result<Option<String>, String> {
+    let cfg = state.config_clone();
+    Ok(state.hub().org_avatar(source, &author, &cfg).await)
+}
+
 /// The resolved LM Studio models directory (reads LM Studio's own config).
 #[tauri::command]
 pub fn lm_studio_dir() -> String {

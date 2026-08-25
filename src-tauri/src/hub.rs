@@ -41,7 +41,7 @@ fn store_avatar(author: &str, url: &str) {
 /// or the hf-mirror — both serve the same accounts). Cached per author.
 /// Example: Qwen →
 /// https://cdn-avatars.huggingface.co/v1/production/uploads/6215ca5692c0ecfba9186921/….jpeg
-async fn fetch_org_avatar(
+pub(crate) async fn fetch_org_avatar(
     http: &reqwest::Client,
     base: &'static str,
     author: &str,
@@ -847,6 +847,28 @@ impl HubClient {
     }
 
     // ---------------------------------------------------------------- detail
+    /// Resolve the org/user avatar for a publisher on `src`.
+    pub async fn org_avatar(
+        &self,
+        src: Source,
+        author: &str,
+        cfg: &Config,
+    ) -> Option<String> {
+        let _ = cfg;
+        let base: &'static str = match src {
+            Source::ModelScope => Source::HfMirror.api_base(),
+            _ => src.api_base(),
+        };
+        let http = match src {
+            Source::ModelScope => &self.http_direct,
+            _ => &self.http,
+        };
+        // ModelScope has no public org-icon API; resolve via HF under the
+        // same account name (the http_direct client reaches hf-mirror fine
+        // and the chain falls back to huggingface.co directly).
+        fetch_org_avatar(http, base, author).await
+    }
+
     /// Light-weight check whether `repo` exists on `src`.
     pub async fn repo_exists(
         &self,

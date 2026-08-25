@@ -57,6 +57,8 @@ export const api = {
     invoke<boolean>("check_repo_exists", { source, repo }),
   getLmStudioDir: () => invoke<string>("lm_studio_dir"),
   getRecommended: () => invoke<RecommendedItem[]>("get_recommended"),
+  getOrgAvatar: (source: Source, author: string) =>
+    invoke<string | null>("get_org_avatar", { source, author }),
   readAria2Log: (lines?: number) =>
     invoke<string>("read_aria2_log", { lines: lines ?? 200 }),
   getSysStats: () => invoke<SysStats>("get_sys_stats"),
