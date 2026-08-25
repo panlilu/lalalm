@@ -46,26 +46,46 @@ async fn fetch_org_avatar(
     base: &'static str,
     author: &str,
 ) -> Option<String> {
+    // Empty-string cache entry = known-absent (negative cache).
     if let Some(u) = cached_avatar(author) {
-        return Some(u);
+        return if u.is_empty() { None } else { Some(u) };
     }
     if author.is_empty() || author.contains('/') {
         return None;
     }
-    let url = format!("{base}/api/users/{}/avatar", crate::config::encode_path(author));
-    let resp = http
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(6))
-        .send()
-        .await
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
+
+    // HF serves ORGANIZATION avatars and USER avatars from two DIFFERENT
+    // endpoints (/api/organizations/X/avatar vs /api/users/X/avatar — the
+    // users one answers "This user does not exist" for every org like Qwen,
+    // deepseek-ai, mlx-community). Try both paths on the primary host, then
+    // fall back to huggingface.co directly (hf-mirror does not proxy the
+    // organizations endpoint).
+    let enc = crate::config::encode_path(author);
+    let mut urls: Vec<String> = Vec::with_capacity(4);
+    for b in [base, "https://huggingface.co"] {
+        urls.push(format!("{b}/api/organizations/{enc}/avatar"));
+        urls.push(format!("{b}/api/users/{enc}/avatar"));
     }
-    let v = resp.json::<Value>().await.ok()?;
-    let u = v["avatarUrl"].as_str()?.to_string();
-    store_avatar(author, &u);
-    Some(u)
+    urls.dedup();
+    for url in &urls {
+        let resp = match http.get(url).timeout(std::time::Duration::from_secs(4)).send().await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let v = match resp.json::<Value>().await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(u) = v["avatarUrl"].as_str() {
+            store_avatar(author, u);
+            return Some(u.to_string());
+        }
+    }
+    store_avatar(author, ""); // negative cache so we don't retry every search
+    None
 }
 
 /// Fill in org avatars for a result list (concurrently, capped, cached).
