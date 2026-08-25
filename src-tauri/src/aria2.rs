@@ -259,34 +259,35 @@ impl Aria2 {
         r.as_str().map(|s| s.to_string()).ok_or_else(|| "addUri 无返回 gid".into())
     }
 
+    /// Requested status fields. NOTE: aria2 wants `keys` as an ARRAY of
+    /// field names — the object form (`{"field":true}`) is rejected with a
+    /// type error by every tell* method.
+    const KEYS: [&str; 7] = [
+        "gid",
+        "status",
+        "totalLength",
+        "completedLength",
+        "downloadSpeed",
+        "errorMessage",
+        "files",
+    ];
+
     pub async fn tell(&self, method: &str, offset: u64, num: u64) -> Result<Vec<Value>, String> {
-        let r = self.rpc(method, json!([offset, num, {
-            "gid": true, "status": true, "totalLength": true, "completedLength": true,
-            "downloadSpeed": true, "errorMessage": true, "files": true
-        }]))
-        .await?;
+        let r = self
+            .rpc(method, json!([offset, num, Self::KEYS]))
+            .await?;
         Ok(r.as_array().cloned().unwrap_or_default())
     }
 
-    /// aria2.tellActive takes ONLY the secret + keys (no offset/num —
-    /// passing those makes the RPC fail with a type error and every progress
-    /// poll silently comes back empty).
     pub async fn tell_active(&self) -> Result<Vec<Value>, String> {
-        let r = self.rpc("aria2.tellActive", json!([{
-            "gid": true, "status": true, "totalLength": true, "completedLength": true,
-            "downloadSpeed": true, "errorMessage": true, "files": true
-        }]))
-        .await?;
+        let r = self.rpc("aria2.tellActive", json!([Self::KEYS])).await?;
         Ok(r.as_array().cloned().unwrap_or_default())
     }
 
     #[allow(dead_code)]
     pub async fn tell_status(&self, gid: &str) -> Result<Value, String> {
-        self.rpc("aria2.tellStatus", json!([gid, {
-            "gid": true, "status": true, "totalLength": true, "completedLength": true,
-            "downloadSpeed": true, "errorMessage": true
-        }]))
-        .await
+        self.rpc("aria2.tellStatus", json!([gid, Self::KEYS]))
+            .await
     }
 
     pub async fn pause(&self, gid: &str) -> Result<(), String> {
