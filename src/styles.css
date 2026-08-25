@@ -1225,3 +1225,32 @@ input[type="range"] {
   flex: 1;
   user-select: text;
 }
+
+/* per-card cross-channel web links */
+.chan-chip {
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+.chan-chip:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.chan-chip[data-ok="1"] {
+  color: var(--accent-2);
+  border-color: rgba(34, 211, 238, 0.35);
+}
+.chan-chip[data-ok="0"] {
+  opacity: 0.45;
+  text-decoration: line-through;
+  cursor: default;
+}
+.chan-chip:disabled {
+  opacity: 0.35;
+  cursor: progress;
+}

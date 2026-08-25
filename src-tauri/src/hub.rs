@@ -107,7 +107,7 @@ async fn fill_org_avatars(list: &mut [ModelSummary], http: reqwest::Client, src:
         }
         if !todo.contains(&item.author) {
             todo.push(item.author.clone());
-            if todo.len() >= 16 {
+            if todo.len() >= 48 {
                 break;
             }
         }
@@ -1345,5 +1345,36 @@ mod variant_tests {
         ];
         let v = build_variants(ModelFormat::Gguf, &files);
         assert!(v[0].companions.iter().all(|c| c.role != FileRole::Mmproj));
+    }
+}
+
+#[cfg(test)]
+mod live_probe {
+    use super::*;
+
+    /// Manual live probe: `cargo test live_avatar_probe -- --ignored --nocapture`
+    /// Prints what the app's own avatar chain resolves for a real search.
+    #[tokio::test]
+    #[ignore]
+    async fn live_avatar_probe() {
+        let client = HubClient::build(ProxyMode::System, "");
+        let cfg = Config::default();
+        for src in [Source::HfMirror, Source::ModelScope] {
+            let out = client
+                .search(src, "qwen", "downloads", true, 8, &cfg)
+                .await
+                .expect("search failed");
+            println!("--- {src:?} ({} 结果)", out.len());
+            for m in out.iter().take(8) {
+                println!(
+                    "  {:<18} avatar={}",
+                    m.author,
+                    match &m.avatar {
+                        Some(u) => &u[..],
+                        None => "(无)",
+                    }
+                );
+            }
+        }
     }
 }

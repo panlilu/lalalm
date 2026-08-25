@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, SOURCE_LABELS } from "../ipc";
 import { searchCache } from "../cache";
+import { repoWebUrl } from "../util";
 import type { RecommendedItem } from "../types";
 import { IconRefresh } from "../components/icons";
 import { useStore } from "../store";
@@ -101,7 +102,23 @@ function OrgAvatar({ m }: { m: ModelSummary }) {
   );
 }
 
-function ModelCard({ m, onOpen }: { m: ModelSummary; onOpen: () => void }) {
+type ChannelLinks = { hf?: boolean; ms?: boolean };
+
+const CHANNELS: Array<{ key: keyof ChannelLinks; label: string; source: Source }> = [
+  { key: "ms", label: "MS", source: "modelScope" },
+  { key: "hf", label: "HF", source: "huggingFace" },
+];
+
+function ModelCard({
+  m,
+  onOpen,
+  links,
+}: {
+  m: ModelSummary;
+  onOpen: () => void;
+  links?: ChannelLinks;
+}) {
+  const { toast } = useStore();
   return (
     <div className="model-card" onClick={onOpen}>
       <div className="mc-head">
@@ -135,6 +152,45 @@ function ModelCard({ m, onOpen }: { m: ModelSummary; onOpen: () => void }) {
             </span>
           ))}
       </div>
+      <div className="toolbar" style={{ gap: 6, marginTop: 8 }} onClick={(e) => e.stopPropagation()}>
+        <span style={{ fontSize: 11, color: "var(--faint)" }}>网页:</span>
+        {CHANNELS.map(({ key, label, source }) => {
+          const known = links?.[key];
+          const ok = known === true;
+          return (
+            <button
+              key={key}
+              className="chan-chip"
+              data-ok={ok ? "1" : "0"}
+              disabled={known === undefined}
+              title={
+                known === undefined
+                  ? "检查可用性中…"
+                  : ok
+                    ? `在 ${label} 网页打开`
+                    : `${label} 未收录此模型`
+              }
+              onClick={() =>
+                api.openUrl(repoWebUrl(source, m.repo)).catch((e) => toast(String(e), "error"))
+              }
+            >
+              {label}
+            </button>
+          );
+        })}
+        {m.source !== "modelScope" && links?.hf === true && (
+          <button
+            className="chan-chip"
+            data-ok="1"
+            title="在 hf-mirror 网页打开"
+            onClick={() =>
+              api.openUrl(repoWebUrl("hfMirror", m.repo)).catch((e) => toast(String(e), "error"))
+            }
+          >
+            镜像
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -151,6 +207,9 @@ export function Discover() {
   const [error, setError] = useState<string | null>(discoverCache.error);
   const [loading, setLoading] = useState(false);
   const [popOpen, setPopOpen] = useState(false);
+  // Cross-channel availability for the cards on screen (filled lazily).
+  const [linkMap, setLinkMap] = useState<Record<string, ChannelLinks>>({});
+  const linkRunRef = useRef(0);
   const searchSeq = useRef(0);
   const lastKeyRef = useRef<string | null>(null);
 
@@ -231,6 +290,42 @@ export function Discover() {
     },
     [effSource, sort, ggufOnly]
   );
+
+  // Background cross-channel availability check for visible results.
+  useEffect(() => {
+    if (!results || results.length === 0) return;
+    const run = ++linkRunRef.current;
+    setLinkMap({});
+    let cancelled = false;
+    (async () => {
+      const pool = 6;
+      const queue = [...results];
+      const worker = async () => {
+        while (queue.length > 0 && !cancelled) {
+          const m = queue.shift()!;
+          const key = `${m.source}:${m.repo}`;
+          try {
+            const [hf, ms] = await Promise.all([
+              m.source === "modelScope"
+                ? api.checkRepoExists("huggingFace", m.repo)
+                : Promise.resolve(true),
+              api.checkRepoExists("modelScope", m.repo),
+            ]);
+            if (cancelled) return;
+            setLinkMap((prev) => ({ ...prev, [key]: { hf, ms } }));
+          } catch {
+            /* leave unknown */
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: pool }, worker));
+      void run;
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results]);
 
   // Initial discovery list (only when there is nothing cached yet).
   useEffect(() => {
@@ -459,6 +554,7 @@ export function Discover() {
             <ModelCard
               key={`${m.source}:${m.repo}`}
               m={m}
+              links={linkMap[`${m.source}:${m.repo}`]}
               onOpen={() => openDetail(m.repo, m.source)}
             />
           ))}
