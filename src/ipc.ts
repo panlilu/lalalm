@@ -8,6 +8,7 @@ import type {
   ModelDetail,
   ModelSummary,
   OpResult,
+  RecommendedItem,
   Source,
   SysStats,
 } from "./types";
@@ -55,6 +56,7 @@ export const api = {
   checkRepoExists: (source: Source, repo: string) =>
     invoke<boolean>("check_repo_exists", { source, repo }),
   getLmStudioDir: () => invoke<string>("lm_studio_dir"),
+  getRecommended: () => invoke<RecommendedItem[]>("get_recommended"),
   readAria2Log: (lines?: number) =>
     invoke<string>("read_aria2_log", { lines: lines ?? 200 }),
   getSysStats: () => invoke<SysStats>("get_sys_stats"),

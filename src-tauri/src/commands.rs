@@ -392,3 +392,31 @@ pub fn read_aria2_log(state: State<'_, AppState>, lines: Option<u32>) -> Result<
 pub async fn get_app_version() -> Result<String, String> {
     Ok(env!("CARGO_PKG_VERSION").to_string())
 }
+
+// ------------------------------------------------------------------ recommended
+
+/// Curated "recommended models" list — compiled into the binary from
+/// `src-tauri/assets/recommended.json` (edit that file + rebuild to change
+/// the list; it ships with every build).
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RecommendedItem {
+    pub source: Source,
+    pub repo: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[tauri::command]
+pub fn get_recommended() -> Result<Vec<RecommendedItem>, String> {
+    const JSON: &str = include_str!("../assets/recommended.json");
+    let parsed: serde_json::Value =
+        serde_json::from_str(JSON).map_err(|e| format!("推荐列表配置损坏: {e}"))?;
+    let items: Vec<RecommendedItem> =
+        serde_json::from_value(parsed["items"].clone()).map_err(|e| e.to_string())?;
+    Ok(items)
+}

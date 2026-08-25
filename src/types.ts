@@ -147,6 +147,14 @@ export type ProxyMode = "system" | "direct" | "manual";
 export type DownloadDestination = "library" | "lmStudio";
 export type ThemeMode = "system" | "dark" | "light";
 
+export interface RecommendedItem {
+  source: Source;
+  repo: string;
+  category: string;
+  note: string;
+  tags: string[];
+}
+
 export interface Config {
   source: Source;
   hfToken: string;

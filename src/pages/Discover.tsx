@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, SOURCE_LABELS } from "../ipc";
 import { searchCache } from "../cache";
+import type { RecommendedItem } from "../types";
+import { IconRefresh } from "../components/icons";
 import { useStore } from "../store";
 import type { ModelSummary, Source } from "../types";
 import { formatCount, formatDate } from "../util";
@@ -37,6 +39,45 @@ let discoverCache: DiscoverCache = {
   results: null,
   error: null,
 };
+
+function RecCard({ item, onOpen }: { item: RecommendedItem; onOpen: () => void }) {
+  const name = item.repo.split("/").pop() ?? item.repo;
+  const author = item.repo.split("/")[0] ?? "";
+  return (
+    <div className="model-card" onClick={onOpen}>
+      <div className="mc-head">
+        <div className="mc-avatar" style={{ background: avatarGradient(item.repo) }}>
+          {name.charAt(0)}
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div className="mc-name">{name}</div>
+          <div className="mc-author">{author}</div>
+        </div>
+      </div>
+      <div
+        style={{
+          fontSize: 12,
+          color: "var(--muted)",
+          margin: "8px 0",
+          minHeight: 34,
+        }}
+      >
+        {item.note}
+      </div>
+      <div className="toolbar" style={{ gap: 6, flexWrap: "wrap" }}>
+        <span className="badge badge-accent">{item.category}</span>
+        {item.tags.map((t) => (
+          <span key={t} className="badge">
+            {t}
+          </span>
+        ))}
+        <span className="badge" style={{ marginLeft: "auto" }}>
+          {SOURCE_LABELS[item.source]}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 function OrgAvatar({ m }: { m: ModelSummary }) {
   const [broken, setBroken] = useState(false);
@@ -128,9 +169,15 @@ export function Discover() {
   }, [query, source, sort, ggufOnly, results, error]);
 
   const [stale, setStale] = useState(false);
+  const [recs, setRecs] = useState<RecommendedItem[] | null>(null);
+  const [homeTab, setHomeTab] = useState<"rec" | "hot">("rec");
+
+  useEffect(() => {
+    api.getRecommended().then(setRecs).catch(() => setRecs([]));
+  }, []);
 
   const doSearch = useCallback(
-    async (q: string) => {
+    async (q: string, opts?: { skipCache?: boolean }) => {
       const seq = ++searchSeq.current;
       // Remember the exact parameter set in flight so redundant effect
       // triggers (config arriving, remounts) don't double-fire.
@@ -141,8 +188,9 @@ export function Discover() {
       setPopOpen(false);
 
       // Stale-while-revalidate: a cached list renders instantly and the
-      // network refresh happens behind it.
-      const hit = searchCache.get(cacheKey);
+      // network refresh happens behind it. skipCache (manual refresh)
+      // bypasses the instant render and always hits the network.
+      const hit = opts?.skipCache ? undefined : searchCache.get(cacheKey);
       if (hit) {
         setResults(hit.results);
         setStale(true);
@@ -210,6 +258,7 @@ export function Discover() {
 
   const recents = config?.recentSearches ?? [];
   const suggestions = config?.suggestQueries ?? [];
+  const recMode = query === "" && homeTab === "rec";
 
   return (
     <div className="page-inner">
@@ -290,8 +339,48 @@ export function Discover() {
         )}
       </div>
 
+      {/* home tabs (only before a query is typed) */}
+      {query === "" && (
+        <div className="toolbar" style={{ marginBottom: 12 }}>
+          <div className="seg">
+            <button className={homeTab === "rec" ? "on" : ""} onClick={() => setHomeTab("rec")}>
+              ✦ 编辑推荐
+            </button>
+            <button className={homeTab === "hot" ? "on" : ""} onClick={() => setHomeTab("hot")}>
+              热门发现
+            </button>
+          </div>
+          <span style={{ color: "var(--faint)", fontSize: 12 }}>
+            精选模型由配置文件维护 · 点击卡片查看量化与可运行性
+          </span>
+        </div>
+      )}
+
+      {/* recommended grid */}
+      {query === "" && homeTab === "rec" && (
+        recs === null ? (
+          <div className="model-grid">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="skeleton" style={{ height: 150 }} />
+            ))}
+          </div>
+        ) : (
+          <div className="model-grid">
+            {recs.map((item) => (
+              <RecCard
+                key={`${item.source}:${item.repo}`}
+                item={item}
+                onOpen={() => openDetail(item.repo, item.source)}
+              />
+            ))}
+          </div>
+        )
+      )}
+
+      {!recMode && (
+      <>
       {/* toolbar */}
-      <div className="toolbar" style={{ marginTop: 16 }}>
+      <div className="toolbar" style={{ marginTop: query === "" ? 0 : 16 }}>
         <div className="seg">
           {(["modelScope", "huggingFace", "hfMirror"] as Source[]).map((s) => (
             <button
@@ -318,6 +407,14 @@ export function Discover() {
           仅 GGUF
         </button>
         <div style={{ flex: 1 }} />
+        <button
+          className="btn-icon"
+          title="强制刷新（忽略缓存）"
+          disabled={loading}
+          onClick={() => doSearch(query, { skipCache: true })}
+        >
+          <IconRefresh size={15} />
+        </button>
         {results !== null && stale && (
           <span className="badge badge-warn" title="正在后台获取最新数据">
             缓存 · 刷新中…
@@ -372,6 +469,8 @@ export function Discover() {
         <div className="empty-state">
           <div className="spinner" />
         </div>
+      )}
+      </>
       )}
     </div>
   );
