@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, SOURCE_LABELS } from "../ipc";
+import { searchCache } from "../cache";
 import { useStore } from "../store";
 import type { ModelSummary, Source } from "../types";
 import { formatCount, formatDate } from "../util";
@@ -126,16 +127,30 @@ export function Discover() {
     };
   }, [query, source, sort, ggufOnly, results, error]);
 
+  const [stale, setStale] = useState(false);
+
   const doSearch = useCallback(
     async (q: string) => {
       const seq = ++searchSeq.current;
       // Remember the exact parameter set in flight so redundant effect
       // triggers (config arriving, remounts) don't double-fire.
-      lastKeyRef.current = `${effSource}|${sort}|${ggufOnly}|${q}`;
-      setLoading(true);
+      const cacheKey = `${effSource}|${sort}|${ggufOnly}|${q}`;
+      lastKeyRef.current = cacheKey;
       setError(null);
       setQuery(q);
       setPopOpen(false);
+
+      // Stale-while-revalidate: a cached list renders instantly and the
+      // network refresh happens behind it.
+      const hit = searchCache.get(cacheKey);
+      if (hit) {
+        setResults(hit.results);
+        setStale(true);
+      } else {
+        setResults(null);
+        setStale(false);
+      }
+      setLoading(true);
       try {
         const list = await api.searchModels({
           source: effSource,
@@ -145,13 +160,22 @@ export function Discover() {
           limit: 36,
         });
         if (seq === searchSeq.current) {
+          searchCache.put(cacheKey, list);
           setResults(list);
+          setStale(false);
           if (list.length === 0) setError(null);
         }
       } catch (e) {
         if (seq === searchSeq.current) {
-          setResults([]);
-          setError(String(e));
+          // Keep cached results visible on network failure.
+          if (!hit) {
+            setResults([]);
+            setError(String(e));
+          } else {
+            setStale(true);
+            setLoading(false);
+          }
+          return;
         }
       } finally {
         if (seq === searchSeq.current) setLoading(false);
@@ -294,6 +318,11 @@ export function Discover() {
           仅 GGUF
         </button>
         <div style={{ flex: 1 }} />
+        {results !== null && stale && (
+          <span className="badge badge-warn" title="正在后台获取最新数据">
+            缓存 · 刷新中…
+          </span>
+        )}
         {results !== null && !loading && (
           <span style={{ color: "var(--faint)", fontSize: 12.5 }}>
             共 {results.length} 个结果
@@ -319,7 +348,7 @@ export function Discover() {
         </div>
       )}
 
-      {!loading && results !== null && results.length === 0 && !error && (
+      {!error && results !== null && results.length === 0 && (
         <div className="empty-state">
           <div className="big">🔍</div>
           <h3>没有找到匹配的模型</h3>
@@ -327,7 +356,7 @@ export function Discover() {
         </div>
       )}
 
-      {!loading && results !== null && results.length > 0 && (
+      {results !== null && results.length > 0 && (
         <div className="model-grid">
           {results.map((m) => (
             <ModelCard
