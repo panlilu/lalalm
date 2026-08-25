@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../ipc";
 import { useStore } from "../store";
 import type { DlStatus, DownloadTask } from "../types";
@@ -25,6 +26,9 @@ const STATUS_META: Record<DlStatus, { label: string; cls: string }> = {
 function TaskCard({ t }: { t: DownloadTask }) {
   const { toast } = useStore();
   const pct = percent(t.downloaded, t.total);
+  // Redirect targets sometimes omit Content-Length: total stays 0 while
+  // bytes flow. Show an indeterminate bar instead of a stuck 0%.
+  const unknownSize = t.total <= 0 && t.downloaded > 0;
   const eta = t.speed > 0 ? (t.total - t.downloaded) / t.speed : Infinity;
   const act = (p: Promise<unknown>, okMsg?: string) =>
     p
@@ -110,13 +114,20 @@ function TaskCard({ t }: { t: DownloadTask }) {
       <div
         className={`progress${t.status === "completed" ? " done" : ""}${
           t.status === "error" ? " error" : ""
-        }`}
+        }${unknownSize ? " indeterminate" : ""}`}
       >
-        <div style={{ width: `${t.status === "completed" ? 100 : pct}%` }} />
+        <div
+          style={{
+            width:
+              unknownSize && t.status === "active"
+                ? "100%"
+                : `${t.status === "completed" ? 100 : pct}%`,
+          }}
+        />
       </div>
 
       <div className="dl-sub">
-        <span>{pct.toFixed(1)}%</span>
+        <span>{unknownSize ? (t.status === "active" ? "下载中…" : "—") : `${pct.toFixed(1)}%`}</span>
         <span>
           {formatBytes(t.downloaded)} / {formatBytes(t.total)}
         </span>
@@ -136,7 +147,33 @@ function TaskCard({ t }: { t: DownloadTask }) {
 }
 
 export function Downloads() {
-  const { downloads, goDiscover } = useStore();
+  const { downloads, goDiscover, toast } = useStore();
+  const [logOpen, setLogOpen] = useState(false);
+  const [logText, setLogText] = useState("");
+  const logRef = useRef<HTMLPreElement | null>(null);
+
+  const refreshLog = useCallback(async () => {
+    try {
+      const t = await api.readAria2Log(200);
+      setLogText(t);
+    } catch (e) {
+      setLogText(`读取日志失败: ${String(e)}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!logOpen) return;
+    refreshLog();
+    const iv = window.setInterval(refreshLog, 2000);
+    return () => window.clearInterval(iv);
+  }, [logOpen, refreshLog]);
+
+  useEffect(() => {
+    if (logOpen && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [logText, logOpen]);
+
   const active = downloads.filter((d) =>
     ["active", "queued", "paused"].includes(d.status)
   );
@@ -155,6 +192,12 @@ export function Downloads() {
             aria2c 多线程加速 · 支持暂停 / 继续 / 取消 / 断点续传
           </div>
         </div>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => setLogOpen((v) => !v)}
+        >
+          {logOpen ? "收起运行日志 ▲" : "aria2 运行日志 ▼"}
+        </button>
         {active.length > 0 && (
           <span className="badge badge-accent" style={{ fontSize: 12.5, padding: "5px 12px" }}>
             总速度 {formatSpeed(totalSpeed)}
@@ -170,6 +213,55 @@ export function Downloads() {
           </button>
         )}
       </div>
+
+      {logOpen && (
+        <div className="card" style={{ marginBottom: 16, padding: 0, overflow: "hidden" }}>
+          <div
+            className="toolbar"
+            style={{
+              padding: "9px 14px",
+              justifyContent: "space-between",
+              borderBottom: "1px solid var(--border-soft)",
+            }}
+          >
+            <b style={{ fontSize: 12.5 }}>aria2c 运行日志（每 2 秒自动刷新）</b>
+            <div className="toolbar" style={{ gap: 8 }}>
+              <button className="btn btn-ghost btn-sm" onClick={refreshLog}>
+                刷新
+              </button>
+              {downloads[0] && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    const d = downloads.find((x) => ["active", "queued", "paused"].includes(x.status)) ?? downloads[0];
+                    api.revealPath(d.dir).catch((e) => toast(String(e), "error"));
+                  }}
+                >
+                  打开下载目录
+                </button>
+              )}
+            </div>
+          </div>
+          <pre
+            ref={logRef}
+            style={{
+              margin: 0,
+              padding: "12px 14px",
+              maxHeight: 260,
+              overflow: "auto",
+              fontSize: 11.5,
+              lineHeight: 1.5,
+              background: "var(--bg)",
+              color: "var(--muted)",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+              userSelect: "text",
+            }}
+          >
+            {logText || "加载中…"}
+          </pre>
+        </div>
+      )}
 
       {downloads.length === 0 ? (
         <div className="empty-state">

@@ -227,6 +227,34 @@ fn build_variants(format: ModelFormat, files: &[ModelFile]) -> Vec<Variant> {
     }
 }
 
+/// Repos may ship several vision projectors (mmproj-f16 / bf16 / f32 …).
+/// Only ONE is worth downloading: prefer the standard `f16`, then bf16 /
+/// quantized variants, tie-breaking on the smaller file. Returns None when
+/// the repo has no mmproj files.
+fn pick_best_mmproj(candidates: &[&ModelFile]) -> Option<ModelFile> {
+    let rank = |p: &str| -> u8 {
+        let l = p.to_lowercase();
+        let name = l.rsplit('/').next().unwrap_or(&l);
+        if name.contains("f16") {
+            5
+        } else if name.contains("bf16") {
+            4
+        } else if name.contains("q8") {
+            3
+        } else if name.contains("q6") || name.contains("q5") {
+            2
+        } else if name.contains("f32") {
+            1 // huge and unnecessary — only picked if it's all there is
+        } else {
+            0
+        }
+    };
+    candidates
+        .iter()
+        .max_by_key(|f| (rank(&f.path), std::cmp::Reverse(f.size)))
+        .map(|f| (*f).clone())
+}
+
 fn build_gguf_variants(files: &[ModelFile]) -> Vec<Variant> {
     use std::collections::BTreeMap;
     // group key = shard-normalized file name; preserves multi-shard quants
@@ -239,11 +267,19 @@ fn build_gguf_variants(files: &[ModelFile]) -> Vec<Variant> {
         groups.entry(base).or_default().push(f.clone());
     }
 
-    let companions: Vec<ModelFile> = files
+    let mut companions: Vec<ModelFile> = files
         .iter()
-        .filter(|f| matches!(classify_role(&f.path), FileRole::Mmproj | FileRole::Config | FileRole::Tokenizer))
+        .filter(|f| matches!(classify_role(&f.path), FileRole::Config | FileRole::Tokenizer))
         .cloned()
         .collect();
+    // One vision projector max — the best fit for this machine.
+    let mmproj_all: Vec<&ModelFile> = files
+        .iter()
+        .filter(|f| classify_role(&f.path) == FileRole::Mmproj)
+        .collect();
+    if let Some(best) = pick_best_mmproj(&mmproj_all) {
+        companions.push(best);
+    }
     let companions_size = companions.iter().map(|f| f.size).sum();
 
     let mut variants: Vec<Variant> = groups
@@ -307,11 +343,19 @@ fn build_tensor_variants(files: &[ModelFile]) -> Vec<Variant> {
         groups.insert(String::new(), vec![]);
     }
 
-    let companions: Vec<ModelFile> = files
+    let mut companions: Vec<ModelFile> = files
         .iter()
-        .filter(|f| matches!(classify_role(&f.path), FileRole::Mmproj | FileRole::Config | FileRole::Tokenizer))
+        .filter(|f| matches!(classify_role(&f.path), FileRole::Config | FileRole::Tokenizer))
         .cloned()
         .collect();
+    // One vision projector max — the best fit for this machine.
+    let mmproj_all: Vec<&ModelFile> = files
+        .iter()
+        .filter(|f| classify_role(&f.path) == FileRole::Mmproj)
+        .collect();
+    if let Some(best) = pick_best_mmproj(&mmproj_all) {
+        companions.push(best);
+    }
     let companions_size = companions.iter().map(|f| f.size).sum();
 
     let mut variants: Vec<Variant> = groups
@@ -1190,7 +1234,7 @@ mod tests {
         assert_eq!(parse_windows_reg_proxy(off), None);
     }
 
-    fn mf(path: &str, size: u64) -> ModelFile {
+    pub(super) fn mf(path: &str, size: u64) -> ModelFile {
         ModelFile::new(path.to_string(), size)
     }
 
@@ -1247,5 +1291,39 @@ mod tests {
         assert!(v[0].recommended);
         // Config/tokenizer attached as companions on every variant.
         assert!(v[0].companions.iter().any(|f| f.path == "config.json"));
+    }
+}
+
+#[cfg(test)]
+mod variant_tests {
+    use super::tests::mf;
+    use super::*;
+
+    #[test]
+    fn picks_single_f16_mmproj() {
+        let files = vec![
+            mf("config.json", 700),
+            mf("mmproj-model-f32.gguf", 1_600_000_000),
+            mf("mmproj-model-f16.gguf", 800_000_000),
+            mf("mmproj-project-bf16.gguf", 800_000_000),
+            mf("Model-Q4_K_M.gguf", 4_000_000_000),
+        ];
+        let v = build_variants(ModelFormat::Gguf, &files);
+        let rec = v.iter().find(|x| x.recommended).unwrap();
+        let mm: Vec<&ModelFile> =
+            rec.companions.iter().filter(|c| c.role == FileRole::Mmproj).collect();
+        assert_eq!(mm.len(), 1, "exactly one mmproj should be offered");
+        assert!(mm[0].path.contains("f16"));
+        assert_eq!(rec.total_size, 4_000_000_000);
+    }
+
+    #[test]
+    fn no_mmproj_means_no_companion() {
+        let files = vec![
+            mf("Model-f16.gguf", 4_000_000_000),
+            mf("tokenizer.json", 7_000_000),
+        ];
+        let v = build_variants(ModelFormat::Gguf, &files);
+        assert!(v[0].companions.iter().all(|c| c.role != FileRole::Mmproj));
     }
 }

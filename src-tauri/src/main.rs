@@ -204,6 +204,7 @@ fn main() {
             commands::open_url,
             commands::check_repo_exists,
             commands::lm_studio_dir,
+            commands::read_aria2_log,
             commands::get_app_version,
         ])
         .build(tauri::generate_context!())

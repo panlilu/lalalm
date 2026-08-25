@@ -368,6 +368,26 @@ pub fn lm_studio_dir() -> String {
         .to_string()
 }
 
+/// Tail of the aria2c download log (the engine's formatted log file).
+#[tauri::command]
+pub fn read_aria2_log(state: State<'_, AppState>, lines: Option<u32>) -> Result<String, String> {
+    let path = state.app_data.join("logs").join("aria2.log");
+    if !path.exists() {
+        return Ok("(日志文件尚未创建 —— 启动一次下载后这里会出现 aria2 的运行日志)".into());
+    }
+    let n = lines.unwrap_or(200).max(1) as usize;
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&bytes);
+    let total = text.lines().count();
+    let start = total.saturating_sub(n);
+    let tail: String = text
+        .lines()
+        .skip(start)
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(format!("-- 共 {total} 行，显示最后 {} 行 --\n{tail}", total - start))
+}
+
 #[tauri::command]
 pub async fn get_app_version() -> Result<String, String> {
     Ok(env!("CARGO_PKG_VERSION").to_string())

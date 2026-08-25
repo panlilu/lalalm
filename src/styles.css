@@ -435,6 +435,20 @@ input::placeholder {
 .progress.error > div {
   background: var(--danger);
 }
+/* Unknown total size: pulse the full-width bar instead of freezing at 0%. */
+.progress.indeterminate > div {
+  opacity: 0.55;
+  animation: dl-pulse 1.4s ease-in-out infinite;
+}
+@keyframes dl-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
 
 .empty-state {
   text-align: center;

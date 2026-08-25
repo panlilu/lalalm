@@ -87,7 +87,6 @@ impl Aria2 {
         max_conn_per_server: u32,
         split: u32,
         min_split_size: &str,
-        proxy: Option<&str>,
         log_file: Option<PathBuf>,
     ) -> Result<Self, String> {
         let bin = resolve_binary().ok_or_else(|| {
@@ -125,11 +124,14 @@ impl Aria2 {
             "--user-agent=LalaLM/0.1".into(),
             format!("--stop-with-process={}", std::process::id()),
         ];
-        if let Some(p) = proxy {
-            let p = p.trim();
-            if !p.is_empty() {
-                args.push(format!("--all-proxy={p}"));
+        if let Some(f) = &log_file {
+            if let Some(dir) = f.parent() {
+                let _ = std::fs::create_dir_all(dir);
             }
+            // aria2's formatted log (download events, errors) — this is
+            // what the in-app log viewer reads.
+            args.push(format!("--log={}", f.display()));
+            args.push("--log-level=notice".into());
         }
         cmd.args(args)
             .stdin(std::process::Stdio::null())
@@ -141,9 +143,6 @@ impl Aria2 {
 
         match log_file {
             Some(f) => {
-                if let Some(dir) = f.parent() {
-                    let _ = std::fs::create_dir_all(dir);
-                }
                 if let Ok(file) = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -228,7 +227,17 @@ impl Aria2 {
         Ok(v.get("result").cloned().unwrap_or(Value::Null))
     }
 
-    pub async fn add_uri(&self, url: &str, dir: &str, out: &str, auth: Option<&str>, conn: u32, split: u32) -> Result<String, String> {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_uri(
+        &self,
+        url: &str,
+        dir: &str,
+        out: &str,
+        auth: Option<&str>,
+        conn: u32,
+        split: u32,
+        proxy: Option<&str>,
+    ) -> Result<String, String> {
         let mut opts = json!({
             "dir": dir,
             "out": out,
@@ -239,12 +248,31 @@ impl Aria2 {
         if let Some(a) = auth {
             opts["header"] = json!([format!("Authorization: {a}")]);
         }
+        // Per-task proxy: ModelScope stays direct (China-hosted), HF goes
+        // through the configured proxy. Overrides any global setting.
+        if let Some(p) = proxy {
+            if !p.trim().is_empty() {
+                opts["all-proxy"] = json!(p.trim());
+            }
+        }
         let r = self.rpc("aria2.addUri", json!([[url], opts])).await?;
         r.as_str().map(|s| s.to_string()).ok_or_else(|| "addUri 无返回 gid".into())
     }
 
     pub async fn tell(&self, method: &str, offset: u64, num: u64) -> Result<Vec<Value>, String> {
         let r = self.rpc(method, json!([offset, num, {
+            "gid": true, "status": true, "totalLength": true, "completedLength": true,
+            "downloadSpeed": true, "errorMessage": true, "files": true
+        }]))
+        .await?;
+        Ok(r.as_array().cloned().unwrap_or_default())
+    }
+
+    /// aria2.tellActive takes ONLY the secret + keys (no offset/num —
+    /// passing those makes the RPC fail with a type error and every progress
+    /// poll silently comes back empty).
+    pub async fn tell_active(&self) -> Result<Vec<Value>, String> {
+        let r = self.rpc("aria2.tellActive", json!([{
             "gid": true, "status": true, "totalLength": true, "completedLength": true,
             "downloadSpeed": true, "errorMessage": true, "files": true
         }]))

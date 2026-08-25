@@ -87,6 +87,7 @@ pub fn persist(state: &AppState) {
 /// Make sure an aria2c RPC server is running (restarts dead processes).
 pub async fn ensure_aria2(state: &AppState) -> Result<(), String> {
     let cfg = state.config_clone();
+    let fresh_start;
     {
         let mut guard = state.aria2.lock().await;
         if let Some(a2) = guard.as_mut() {
@@ -95,20 +96,86 @@ pub async fn ensure_aria2(state: &AppState) -> Result<(), String> {
             }
         }
         let log = state.app_data.join("logs").join("aria2.log");
-        let proxy = crate::hub::effective_proxy(&cfg);
         let a2 = Aria2::start(
             &cfg.download_dir,
             cfg.aria2.max_concurrent_downloads.max(1),
             cfg.aria2.max_connection_per_server.max(1),
             cfg.aria2.split.max(1),
             &cfg.aria2.min_split_size,
-            proxy.as_deref(),
             Some(log),
         )
         .await?;
         *guard = Some(a2);
+        fresh_start = true;
+    }
+    // A brand-new engine knows none of the old gids: any non-terminal task
+    // would otherwise poll forever at 0% while its partial file sits on
+    // disk. Re-queue those tasks on the new instance (--continue resumes).
+    if fresh_start {
+        resume_orphans(state).await;
     }
     Ok(())
+}
+
+/// Re-add every non-terminal task to the freshly started engine.
+async fn resume_orphans(state: &AppState) {
+    let snapshot: Vec<DownloadTask> = {
+        let tasks = state.tasks.read().unwrap();
+        tasks
+            .iter()
+            .filter(|t| !t.status.terminal() && t.gid.is_some())
+            .cloned()
+            .collect()
+    };
+    if snapshot.is_empty() {
+        return;
+    }
+    let cfg = state.config_clone();
+    for t in snapshot {
+        let source = t.source;
+        let task_proxy = match source {
+            Source::ModelScope => None,
+            _ => crate::hub::effective_proxy(&cfg),
+        };
+        let gid = {
+            let guard = state.aria2.lock().await;
+            match guard.as_ref() {
+                Some(a2) => {
+                    let auth = source.auth_header(&cfg);
+                    a2.add_uri(
+                        &t.url.clone(),
+                        &t.dir.to_string_lossy(),
+                        &t.out,
+                        auth.as_deref(),
+                        cfg.aria2.max_connection_per_server.max(1),
+                        cfg.aria2.split.max(1),
+                        task_proxy.as_deref(),
+                    )
+                    .await
+                }
+                None => Err("aria2 未启动".into()),
+            }
+        };
+        {
+            let mut tasks = state.tasks.write().unwrap();
+            if let Some(t) = find_mut(&mut tasks, &t.id) {
+                match gid {
+                    Ok(new_gid) => {
+                        t.gid = Some(new_gid);
+                        t.status = DlStatus::Active;
+                        t.error = None;
+                        t.updated_at = now();
+                    }
+                    Err(e) => {
+                        t.status = DlStatus::Interrupted;
+                        t.error = Some(format!("引擎重启后恢复失败：{e}"));
+                        t.updated_at = now();
+                    }
+                }
+            }
+        }
+        persist(state);
+    }
 }
 
 /// Public entry used by the `start_download` command.
@@ -157,6 +224,12 @@ pub async fn start_download(
 
     ensure_aria2(state).await?;
 
+    // Proxy is per-task and per-source: HF benefits from it, ModelScope
+    // (China-hosted) must stay direct or downloads stall through proxies.
+    let task_proxy = match source {
+        Source::ModelScope => None,
+        _ => crate::hub::effective_proxy(&cfg),
+    };
     let gid = {
         let guard = state.aria2.lock().await;
         let a2 = guard.as_ref().ok_or("aria2 未启动")?;
@@ -168,6 +241,7 @@ pub async fn start_download(
             auth.as_deref(),
             cfg.aria2.max_connection_per_server.max(1),
             cfg.aria2.split.max(1),
+            task_proxy.as_deref(),
         )
         .await?
     };
@@ -310,6 +384,10 @@ pub async fn retry(state: &AppState, id: &str) -> Result<DownloadTask, String> {
             let _ = a2.remove_result(old).await;
         }
         let auth = source.auth_header(&cfg);
+        let task_proxy = match source {
+            Source::ModelScope => None,
+            _ => crate::hub::effective_proxy(&cfg),
+        };
         a2.add_uri(
             &url,
             &dir.to_string_lossy(),
@@ -317,6 +395,7 @@ pub async fn retry(state: &AppState, id: &str) -> Result<DownloadTask, String> {
             auth.as_deref(),
             cfg.aria2.max_connection_per_server.max(1),
             cfg.aria2.split.max(1),
+            task_proxy.as_deref(),
         )
         .await?
     };
@@ -346,7 +425,7 @@ pub fn clear_finished(state: &AppState) -> usize {
 
 /// Background reconciliation between aria2 state and our task list.
 pub async fn reconcile(state: &AppState, a2: &mut Aria2) -> Result<(), String> {
-    let active = a2.tell("aria2.tellActive", 0, 100).await.unwrap_or_default();
+    let active = a2.tell_active().await.unwrap_or_default();
     let waiting = a2
         .tell("aria2.tellWaiting", 0, 200)
         .await
@@ -356,8 +435,11 @@ pub async fn reconcile(state: &AppState, a2: &mut Aria2) -> Result<(), String> {
         .await
         .unwrap_or_default();
 
-    let mut updates: HashMap<String, (DlStatus, u64, u64, u64, Option<String>)> =
-        HashMap::new();
+    #[allow(clippy::type_complexity)]
+    let mut updates: HashMap<
+        String,
+        (DlStatus, u64, u64, u64, Option<String>, Option<String>),
+    > = HashMap::new();
     let mut clear_gids: Vec<String> = Vec::new();
 
     for e in active.iter().chain(waiting.iter()).chain(stopped.iter()) {
@@ -380,7 +462,13 @@ pub async fn reconcile(state: &AppState, a2: &mut Aria2) -> Result<(), String> {
             .as_str()
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        updates.insert(gid.clone(), (st, total, completed, speed, err));
+        // Where aria2 actually put the file (may differ from the requested
+        // name after exotic redirects) — used for a completion rename-back.
+        let actual_path = e["files"][0]["path"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        updates.insert(gid.clone(), (st, total, completed, speed, err, actual_path));
         if st.terminal() {
             clear_gids.push(gid);
         }
@@ -388,11 +476,30 @@ pub async fn reconcile(state: &AppState, a2: &mut Aria2) -> Result<(), String> {
 
     if !updates.is_empty() {
         let mut changed = false;
+        let mut rename_back: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
         {
             let mut tasks = state.tasks.write().unwrap();
             for t in tasks.iter_mut() {
                 if let Some(gid) = t.gid.clone() {
-                    if let Some((st, total, completed, speed, err)) = updates.get(&gid) {
+                    if let Some((st, total, completed, speed, err, actual)) =
+                        updates.get(&gid)
+                    {
+                        // Completion insurance: if the engine saved the file
+                        // under a different name than requested, move it to
+                        // the expected one so LM Studio / llama.cpp find it.
+                        if *st == DlStatus::Completed {
+                            if let Some(ap) = actual {
+                                let final_path = t.dir.join(&t.out);
+                                let ap_path = std::path::PathBuf::from(ap);
+                                if ap_path != final_path
+                                    && ap_path.exists()
+                                    && !final_path.exists()
+                                    && ap_path.parent() == Some(final_path.parent().unwrap_or(&ap_path))
+                                {
+                                    rename_back.push((ap_path, final_path));
+                                }
+                            }
+                        }
                         if t.status != *st
                             || t.downloaded != *completed
                             || t.total != *total
@@ -410,6 +517,9 @@ pub async fn reconcile(state: &AppState, a2: &mut Aria2) -> Result<(), String> {
                     }
                 }
             }
+        }
+        for (from, to) in rename_back {
+            let _ = std::fs::rename(&from, &to);
         }
         if changed {
             persist(state);
