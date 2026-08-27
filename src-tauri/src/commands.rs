@@ -4,6 +4,7 @@ use crate::config::{self, Config, Source};
 use crate::state::AppState;
 use serde::Serialize;
 use std::path::PathBuf;
+use tauri::{AppHandle, Emitter};
 use tauri::State;
 
 // ------------------------------------------------------------------- config
@@ -433,4 +434,190 @@ pub fn get_recommended() -> Result<Vec<RecommendedItem>, String> {
     let items: Vec<RecommendedItem> =
         serde_json::from_value(parsed["items"].clone()).map_err(|e| e.to_string())?;
     Ok(items)
+}
+
+// ------------------------------------------------------------------ quick download
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickFile {
+    pub path: String,
+    pub size: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickFileStatus {
+    pub path: String,
+    /// absent | downloading | exists | partial
+    pub status: String,
+    pub on_disk: u64,
+    pub target_dir: String,
+}
+
+/// For each requested file, report whether it is already fully present in
+/// the destination directory, currently downloading, partially there
+/// (resumable), or absent — so the quick-download UI can guide the user.
+#[tauri::command]
+pub async fn check_quick_files(
+    state: State<'_, AppState>,
+    #[allow(unused_variables)] source: Source,
+    repo: String,
+    files: Vec<QuickFile>,
+) -> Result<Vec<QuickFileStatus>, String> {
+    let cfg = state.config_clone();
+    let dir = crate::downloads::quick_target_dir(&cfg, &repo);
+    let dir_str = dir.to_string_lossy().to_string();
+    let tasks = state.tasks.read().unwrap();
+    let mut out = Vec::with_capacity(files.len());
+    for f in files {
+        let name = f.path.rsplit('/').next().unwrap_or(&f.path).to_string();
+        let on_disk = std::fs::metadata(dir.join(&name))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let downloading = tasks.iter().any(|t| {
+            !t.status.terminal() && t.dir == dir && t.out == name
+        });
+        let status = if downloading {
+            "downloading"
+        } else if on_disk >= f.size && f.size > 0 {
+            "exists"
+        } else if on_disk > 0 {
+            "partial"
+        } else {
+            "absent"
+        };
+        out.push(QuickFileStatus {
+            path: f.path,
+            status: status.into(),
+            on_disk,
+            target_dir: dir_str.clone(),
+        });
+    }
+    Ok(out)
+}
+
+/// Destination directory a repo would download into right now.
+#[tauri::command]
+pub fn quick_target_dir_cmd(state: State<'_, AppState>, repo: String) -> String {
+    let cfg = state.config_clone();
+    crate::downloads::quick_target_dir(&cfg, &repo)
+        .to_string_lossy()
+        .to_string()
+}
+
+// ------------------------------------------------------------------ update check
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    pub current: String,
+    pub latest: String,
+    pub notes_url: String,
+    /// Installer asset URL matching the current platform, when found.
+    pub asset_url: Option<String>,
+    pub asset_name: Option<String>,
+}
+
+fn version_key(v: &str) -> Vec<u64> {
+    v.trim_start_matches('v')
+        .split('.')
+        .map(|p| p.parse().unwrap_or(0))
+        .collect()
+}
+
+fn pick_asset(assets: &[serde_json::Value]) -> Option<(String, String)> {
+    let want_dmg = cfg!(target_os = "macos");
+    for a in assets {
+        let Some(name) = a["name"].as_str() else { continue };
+        let lower = name.to_lowercase();
+        let url = a["browser_download_url"].as_str()?.to_string();
+        if want_dmg && lower.ends_with(".dmg") {
+            return Some((url, name.to_string()));
+        }
+        if !want_dmg && lower.ends_with("x64-setup.exe") {
+            return Some((url, name.to_string()));
+        }
+    }
+    None
+}
+
+/// Compare the running version against the newest GitHub release.
+#[tauri::command]
+pub async fn check_update(state: State<'_, AppState>) -> Result<Option<UpdateInfo>, String> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let v = state
+        .hub()
+        .get_json("https://api.github.com/repos/panlilu/lalalm/releases/latest", None)
+        .await?;
+    let latest = v["tag_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_string();
+    if latest.is_empty() || version_key(&latest) <= version_key(&current) {
+        return Ok(None);
+    }
+    let picked = v["assets"].as_array().and_then(|a| pick_asset(a));
+    let (asset_url, asset_name) = match picked {
+        Some((u, n)) => (Some(u), Some(n)),
+        None => (None, None),
+    };
+    Ok(Some(UpdateInfo {
+        current,
+        latest,
+        notes_url: v["html_url"].as_str().unwrap_or("").to_string(),
+        asset_url,
+        asset_name,
+    }))
+}
+
+/// Generic direct download (update installers etc.) through aria2.
+#[tauri::command]
+pub async fn download_direct(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    url: String,
+    filename: String,
+) -> Result<(), String> {
+    let cfg = state.config_clone();
+    let dir = state.app_data.join("updates");
+    let _ = std::fs::create_dir_all(&dir);
+    let proxy = crate::hub::effective_proxy(&cfg);
+    crate::downloads::ensure_aria2(&state).await?;
+    let gid = {
+        let guard = state.aria2.lock().await;
+        let a2 = guard.as_ref().ok_or("aria2 未启动")?;
+        a2.add_uri(
+            &url,
+            &dir.to_string_lossy(),
+            &filename,
+            None,
+            cfg.aria2.max_connection_per_server.max(1),
+            cfg.aria2.split.max(1),
+            proxy.as_deref(),
+        )
+        .await?
+    };
+    let task = crate::downloads::DownloadTask {
+        id: crate::state::new_task_id(),
+        repo: format!("更新程序 {filename}"),
+        path: url.clone(),
+        source: Source::HuggingFace,
+        url,
+        dir,
+        out: filename,
+        total: 0,
+        downloaded: 0,
+        speed: 0,
+        status: crate::downloads::DlStatus::Active,
+        error: None,
+        gid: Some(gid),
+        added_at: 0,
+        updated_at: 0,
+    };
+    state.tasks.write().unwrap().insert(0, task);
+    crate::downloads::persist(&state);
+    let _ = app.emit("downloads-changed", state.tasks.read().unwrap().clone());
+    Ok(())
 }

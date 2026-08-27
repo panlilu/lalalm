@@ -147,6 +147,23 @@ export type ProxyMode = "system" | "direct" | "manual";
 export type DownloadDestination = "library" | "lmStudio";
 export type ThemeMode = "system" | "dark" | "light";
 
+export type QuickFileStatusKind = "absent" | "downloading" | "exists" | "partial";
+
+export interface QuickFileStatus {
+  path: string;
+  status: QuickFileStatusKind;
+  onDisk: number;
+  targetDir: string;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  notesUrl: string;
+  assetUrl: string | null;
+  assetName: string | null;
+}
+
 export interface RecommendedItem {
   source: Source;
   repo: string;

@@ -144,3 +144,44 @@ export function repoWebUrl(source: string, repo: string): string {
   return `${SOURCE_HOME[source] ?? SOURCE_HOME.huggingFace}/${repo}`;
 }
 
+
+
+// ---------------------------------------------------------------- quick link
+
+export interface ParsedQuickLink {
+  source: "huggingFace" | "hfMirror" | "modelScope";
+  repo: string;
+  path: string | null;
+}
+
+/** Parse a pasted hub URL into source/repo and (optional) file path. */
+export function parseQuickLink(url: string): ParsedQuickLink | null {
+  let u = url.trim().replace(/\/$/, "");
+  if (!u) return null;
+
+  // ModelScope
+  let m = u.match(
+    /^https?:\/\/modelscope\.cn\/(?:models\/)?([^/\s]+)\/([^/\s]+?)(?:\/resolve\/[^/]+\/(.+))?$/i
+  );
+  if (m) {
+    const path = m[3] ? decodeURIComponent(m[3]) : null;
+    if (!path && /\.(gguf|safetensors|bin)$/i.test(m[2])) return null;
+    return { source: "modelScope", repo: `${m[1]}/${m[2]}`, path };
+  }
+
+  // HF family
+  m = u.match(
+    /^https?:\/\/(huggingface\.co|hf-mirror\.com)\/([^/\s]+)\/([^/\s]+?)(?:\/(?:resolve|blob|raw)\/[^/]+\/(.+))?(?:\/tree\/[^/]+)?$/i
+  );
+  if (m) {
+    const host = m[1].toLowerCase();
+    const path = m[4] ? decodeURIComponent(m[4].replace(/[?#].*$/, "")) : null;
+    if (!path && /\.(gguf|safetensors|bin)$/i.test(m[3])) return null;
+    return {
+      source: host === "hf-mirror.com" ? "hfMirror" : "huggingFace",
+      repo: `${m[2]}/${m[3]}`,
+      path,
+    };
+  }
+  return null;
+}

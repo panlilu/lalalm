@@ -2,6 +2,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   CachePathInfo,
+  QuickFileStatus,
+  UpdateInfo,
   Config,
   DownloadTask,
   LocalModel,
@@ -57,6 +59,21 @@ export const api = {
     invoke<boolean>("check_repo_exists", { source, repo }),
   getLmStudioDir: () => invoke<string>("lm_studio_dir"),
   getRecommended: () => invoke<RecommendedItem[]>("get_recommended"),
+  checkQuickFiles: (
+    source: Source,
+    repo: string,
+    files: Array<{ path: string; size: number }>
+  ) =>
+    invoke<QuickFileStatus[]>("check_quick_files", {
+      source,
+      repo,
+      files: files.map((f) => ({ path: f.path, size: f.size })),
+    }),
+  quickTargetDir: (repo: string) =>
+    invoke<string>("quick_target_dir_cmd", { repo }),
+  checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
+  downloadDirect: (url: string, filename: string) =>
+    invoke<void>("download_direct", { url, filename }),
   getOrgAvatar: (source: Source, author: string) =>
     invoke<string | null>("get_org_avatar", { source, author }),
   readAria2Log: (lines?: number) =>

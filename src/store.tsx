@@ -10,13 +10,16 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import type { ReactNode } from "react";
 import { api } from "./ipc";
-import type { Config, DownloadTask, SysStats } from "./types";
+import type { Config, DownloadTask, SysStats,
+  UpdateInfo,
+} from "./types";
 
 export type Route =
   | { page: "discover" }
   | { page: "detail"; repo: string; source: Config["source"] }
   | { page: "device" }
   | { page: "downloads" }
+  | { page: "quick" }
   | { page: "settings" };
 
 interface Toast {
@@ -25,11 +28,23 @@ interface Toast {
   text: string;
 }
 
+export interface QuickLink {
+  source: Config["source"];
+  repo: string;
+  path: string | null; // null = 项目链接（需要选文件）
+}
+
 interface Store {
+  quickLink: QuickLink | null;
+  setQuickLink: (l: QuickLink | null) => void;
+  updateInfo: UpdateInfo | null;
+  setUpdateInfo: (u: UpdateInfo | null) => void;
+  dismissUpdate: () => void;
   route: Route;
   goDiscover: () => void;
   goDevice: () => void;
   goDownloads: () => void;
+  goQuick: () => void;
   goSettings: () => void;
   openDetail: (repo: string, source: Config["source"]) => void;
   goBack: () => void;
@@ -62,6 +77,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<Config | undefined>();
   const [downloads, setDownloads] = useState<DownloadTask[]>([]);
   const [sysStats, setSysStats] = useState<SysStats | undefined>();
+  const [quickLink, setQuickLink] = useState<QuickLink | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const mounted = useRef(false);
   const navRef = useRef<(r: Route) => void>(() => {});
@@ -111,6 +128,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (page === "downloads") navRef.current({ page: "downloads" });
     });
     api.listDownloads().then(setDownloads).catch(() => {});
+    api.checkUpdate().then((u) => u && setUpdateInfo(u)).catch(() => {});
     api.getSysStats().then(setSysStats).catch(() => {});
 
     return () => {
@@ -130,11 +148,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Tray menu events fire before/after renders; always call the latest nav.
   navRef.current = nav;
 
+  const dismissUpdate = useCallback(() => setUpdateInfo(null), []);
+
   const store: Store = {
+    quickLink,
+    setQuickLink,
     route,
     goDiscover: () => nav({ page: "discover" }),
     goDevice: () => nav({ page: "device" }),
     goDownloads: () => nav({ page: "downloads" }),
+    goQuick: () => nav({ page: "quick" }),
     goSettings: () => nav({ page: "settings" }),
     openDetail: (repo, source) => nav({ page: "detail", repo, source }),
     goBack: () => {
@@ -152,6 +175,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       (d) => d.status === "active" || d.status === "queued" || d.status === "paused"
     ).length,
     sysStats,
+    updateInfo,
+    setUpdateInfo,
+    dismissUpdate,
     toast,
   };
 

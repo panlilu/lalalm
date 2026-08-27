@@ -207,6 +207,10 @@ fn main() {
             commands::read_aria2_log,
             commands::get_recommended,
             commands::get_org_avatar,
+            commands::check_quick_files,
+            commands::quick_target_dir_cmd,
+            commands::check_update,
+            commands::download_direct,
             commands::get_app_version,
         ])
         .build(tauri::generate_context!())

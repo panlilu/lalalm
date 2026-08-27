@@ -5,6 +5,7 @@ import {
   IconDevice,
   IconDownload,
   IconGear,
+  IconPlus,
 } from "./icons";
 import type { SysStats } from "../types";
 
@@ -95,7 +96,7 @@ function SysMon({ stats }: { stats?: SysStats }) {
 }
 
 export function Sidebar() {
-  const { route, goDiscover, goDevice, goDownloads, goSettings, activeCount, sysStats } =
+  const { route, goDiscover, goDevice, goDownloads, goSettings, goQuick, activeCount, sysStats } =
     useStore();
 
   const itemClass = (page: string) =>
@@ -119,6 +120,10 @@ export function Sidebar() {
         <button className={itemClass("device")} onClick={goDevice}>
           <IconDevice />
           本地模型
+        </button>
+        <button className={itemClass("quick")} onClick={goQuick}>
+          <IconPlus />
+          快速下载
         </button>
         <button className={itemClass("downloads")} onClick={goDownloads}>
           <IconDownload />

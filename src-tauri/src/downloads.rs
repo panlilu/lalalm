@@ -2,7 +2,7 @@
 //! aria2 reconciliation loop and history persistence.
 
 use crate::aria2::Aria2;
-use crate::config::Source;
+use crate::config::{Config, effective_download_root, Source};
 use crate::state::{new_task_id, AppState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -52,7 +52,7 @@ pub struct DownloadTask {
     pub updated_at: u64,
 }
 
-fn now() -> u64 {
+pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -194,18 +194,9 @@ pub async fn start_download(
         .unwrap_or(path)
         .to_string();
 
-    let (author, name) = match repo.split_once('/') {
-        Some((a, n)) => (a.to_string(), n.to_string()),
-        None => (String::new(), repo.to_string()),
-    };
     // Destination: LalaLM library or the LM Studio models dir — both use the
     // same publisher/model/file layout so LM Studio recognizes files instantly.
-    let base = crate::config::effective_download_root(&cfg);
-    let dir = if author.is_empty() {
-        base.join(sanitize(&name))
-    } else {
-        base.join(sanitize(&author)).join(sanitize(&name))
-    };
+    let dir = quick_target_dir(&cfg, repo);
 
     // Reject duplicate in-flight tasks for the same target file.
     {
@@ -266,6 +257,21 @@ pub async fn start_download(
     state.tasks.write().unwrap().insert(0, task.clone());
     persist(state);
     Ok(task)
+}
+
+/// Where a file of `repo` lands given current settings (publisher/model dir
+/// under the configured root — LalaLM library or LM Studio's directory).
+pub fn quick_target_dir(cfg: &Config, repo: &str) -> PathBuf {
+    let base = effective_download_root(cfg);
+    let (author, name) = match repo.split_once('/') {
+        Some((a, n)) => (a, n),
+        None => ("", repo),
+    };
+    if author.is_empty() {
+        base.join(sanitize(name))
+    } else {
+        base.join(sanitize(author)).join(sanitize(name))
+    }
 }
 
 fn sanitize(s: &str) -> String {

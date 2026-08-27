@@ -4,6 +4,50 @@ import { useStore } from "../store";
 import type { Config, Source } from "../types";
 import { formatBytes } from "../util";
 
+function AboutCard() {
+  const { toast, updateInfo, setUpdateInfo } = useStore();
+  const [checking, setChecking] = useState(false);
+  const [ver, setVer] = useState("");
+  useEffect(() => {
+    api.getAppVersion().then(setVer).catch(() => {});
+  }, []);
+  return (
+    <div className="toolbar" style={{ flexWrap: "wrap", gap: 10 }}>
+      <span>
+        当前版本 <b>v{ver || "…"}</b>
+        {updateInfo && (
+          <span style={{ color: "var(--accent-2)", marginLeft: 8 }}>
+            · 可更新到 v{updateInfo.latest}（顶部横幅可一键更新）
+          </span>
+        )}
+      </span>
+      <div style={{ flex: 1 }} />
+      <button
+        className="btn btn-ghost btn-sm"
+        disabled={checking}
+        onClick={async () => {
+          setChecking(true);
+          try {
+            const u = await api.checkUpdate();
+            if (u) {
+              setUpdateInfo(u);
+              toast(`发现新版本 v${u.latest}`, "success");
+            } else {
+              toast("已是最新版本 ✓");
+            }
+          } catch (e) {
+            toast(`检查失败：${String(e)}`, "error");
+          } finally {
+            setChecking(false);
+          }
+        }}
+      >
+        {checking ? "检查中…" : "检查更新"}
+      </button>
+    </div>
+  );
+}
+
 export function Settings() {
   const { config, toast, sysStats, reloadConfig } = useStore();
   const [draft, setDraft] = useState<Config | null>(null);
@@ -69,6 +113,12 @@ export function Settings() {
             {saving ? "保存中…" : "保存设置"}
           </button>
         )}
+      </div>
+
+      {/* about */}
+      <div className="card settings-section">
+        <h3>关于</h3>
+        <AboutCard />
       </div>
 
       {/* appearance */}

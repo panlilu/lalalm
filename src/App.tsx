@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
+import { api } from "./ipc";
 import { StoreProvider, useStore } from "./store";
 import { Sidebar } from "./components/Sidebar";
 import { Discover } from "./pages/Discover";
@@ -6,6 +7,7 @@ import { ModelDetail } from "./pages/ModelDetail";
 import { OnDevice } from "./pages/OnDevice";
 import { Downloads } from "./pages/Downloads";
 import { Settings } from "./pages/Settings";
+import { QuickDownload } from "./pages/QuickDownload";
 
 function CurrentPage() {
   const { route } = useStore();
@@ -18,9 +20,58 @@ function CurrentPage() {
       return <OnDevice />;
     case "downloads":
       return <Downloads />;
+    case "quick":
+      return <QuickDownload />;
     case "settings":
       return <Settings />;
   }
+}
+
+function UpdateBanner() {
+  const { updateInfo, dismissUpdate, toast } = useStore();
+  if (!updateInfo) return null;
+  const start = async () => {
+    if (!updateInfo.assetUrl || !updateInfo.assetName) {
+      window.open(updateInfo.notesUrl, "_blank");
+      return;
+    }
+    try {
+      await api.downloadDirect(updateInfo.assetUrl, updateInfo.assetName);
+      toast("安装包已加入下载，完成后在「下载任务」里打开", "success");
+      dismissUpdate();
+    } catch (e) {
+      toast(`下载失败：${String(e)}`, "error");
+    }
+  };
+  return (
+    <div
+      className="toolbar"
+      style={{
+        padding: "8px 18px",
+        background: "var(--panel-2)",
+        borderBottom: "1px solid var(--border-soft)",
+        fontSize: 12.5,
+      }}
+    >
+      <span className="badge badge-accent">新版本 v{updateInfo.latest} 可用</span>
+      <span style={{ color: "var(--muted)" }}>
+        当前 v{updateInfo.current}
+      </span>
+      <div style={{ flex: 1 }} />
+      <button className="btn btn-primary btn-sm" onClick={start}>
+        一键更新{updateInfo.assetName ? ` · ${updateInfo.assetName}` : ""}
+      </button>
+      <button
+        className="btn btn-ghost btn-sm"
+        onClick={() => window.open(updateInfo.notesUrl, "_blank")}
+      >
+        查看说明
+      </button>
+      <button className="btn-icon" title="本次忽略" onClick={dismissUpdate}>
+        ✕
+      </button>
+    </div>
+  );
 }
 
 function Shell() {
@@ -45,6 +96,7 @@ function Shell() {
     <div className="app-shell">
       <Sidebar />
       <main className="main-area">
+        <UpdateBanner />
         <div
           ref={scrollRef}
           className="page"

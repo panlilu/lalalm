@@ -670,7 +670,7 @@ impl HubClient {
         src.auth_header(cfg)
     }
 
-    async fn get_json(&self, url: &str, auth: Option<&str>) -> Result<Value, String> {
+    pub async fn get_json(&self, url: &str, auth: Option<&str>) -> Result<Value, String> {
         self.get_json_via(&self.http, url, auth).await
     }
 
