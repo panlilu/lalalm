@@ -133,6 +133,23 @@ impl Aria2 {
             args.push(format!("--log={}", f.display()));
             args.push("--log-level=notice".into());
         }
+        // Windows sidecar is a mingw/GnuTLS build with no access to the
+        // OS trust store, so HTTPS downloads fail with "unable to get
+        // local issuer certificate" unless we hand aria2 a CA bundle.
+        #[cfg(target_os = "windows")]
+        {
+            const CA_PEM: &str = include_str!("../assets/cacert.pem");
+            let ca_path = std::env::temp_dir().join("lalalm-cacert.pem");
+            let needs_write = std::fs::read_to_string(&ca_path)
+                .map(|c| c != CA_PEM)
+                .unwrap_or(true);
+            if needs_write {
+                std::fs::write(&ca_path, CA_PEM).ok();
+            }
+            if ca_path.exists() {
+                args.push(format!("--ca-certificate={}", ca_path.display()));
+            }
+        }
         cmd.args(args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null());
