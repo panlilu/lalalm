@@ -1,6 +1,6 @@
 [package]
 name = "lalalm"
-version = "0.2.0"
+version = "0.2.1"
 description = "LalaLM — local LLM model center & downloader"
 authors = ["LalaLM"]
 edition = "2021"
