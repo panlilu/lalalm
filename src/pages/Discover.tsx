@@ -3,13 +3,6 @@ import { api, SOURCE_LABELS } from "../ipc";
 import { searchCache } from "../cache";
 import { repoWebUrl } from "../util";
 import type { RecommendedItem } from "../types";
-import {
-  groupModels,
-  classifyVariant,
-  VARIANT_META,
-  canonicalModelName,
-  type ModelGroup,
-} from "../util";
 import { IconRefresh } from "../components/icons";
 import { useStore } from "../store";
 import type { ModelSummary, Source } from "../types";
@@ -47,98 +40,6 @@ let discoverCache: DiscoverCache = {
   results: null,
   error: null,
 };
-
-function VariantGroupCard({
-  group,
-  links,
-  onOpen,
-}: {
-  group: ModelGroup;
-  links: Record<string, ChannelLinks>;
-  onOpen: (repo: string, source: ModelSummary["source"]) => void;
-}) {
-  const rep =
-    group.members.find((m) => classifyVariant(m.name) === "official") ??
-    group.members[0];
-  const publishers = new Set(group.members.map((m) => m.author)).size;
-  // Aggregate channel availability across all members.
-  const agg: ChannelLinks = {};
-  for (const m of group.members) {
-    const l: ChannelLinks | undefined = links[`${m.source}:${m.repo}`];
-    if (!l) continue;
-    agg.hf = agg.hf || l.hf === true || m.source !== "modelScope";
-    agg.ms = agg.ms || l.ms === true || m.source === "modelScope";
-  }
-  return (
-    <div className="model-card">
-      <div className="mc-head">
-        <OrgAvatar m={rep} />
-        <div style={{ minWidth: 0 }}>
-          <div className="mc-name">{canonicalModelName(rep.name)}</div>
-          <div className="mc-author">
-            {group.members.length} 个版本 · {publishers} 家发布者
-          </div>
-        </div>
-      </div>
-      <div
-        className="toolbar"
-        style={{ gap: 6, flexWrap: "wrap", margin: "8px 0", minHeight: 26 }}
-      >
-        {group.members.slice(0, 6).map((m) => {
-          const kind = classifyVariant(m.name);
-          const meta = VARIANT_META[kind];
-          return (
-            <button
-              key={m.repo}
-              className={`badge ${meta.cls}`}
-              style={{ cursor: "pointer", border: "none" }}
-              title={`${m.author}/${m.name} — 打开详情`}
-              onClick={() => onOpen(m.repo, m.source)}
-            >
-              {meta.label}
-              <span style={{ opacity: 0.75, marginLeft: 4 }}>{m.author}</span>
-            </button>
-          );
-        })}
-        {group.members.length > 6 && (
-          <span className="badge">+{group.members.length - 6}</span>
-        )}
-      </div>
-      <div className="toolbar" style={{ gap: 6, marginTop: 4 }} onClick={(e) => e.stopPropagation()}>
-        <span style={{ fontSize: 11, color: "var(--faint)" }}>网页:</span>
-        {CHANNELS.map(({ key, label, source }) => {
-          const ok = agg[key] === true;
-          return (
-            <button
-              key={key}
-              className="chan-chip"
-              data-ok={ok ? "1" : "0"}
-              disabled={!ok}
-              title={ok ? `在 ${label} 网页打开` : `${label} 未收录此模型`}
-              onClick={() =>
-                api.openUrl(repoWebUrl(source, rep.repo)).catch(() => {})
-              }
-            >
-              {label}
-            </button>
-          );
-        })}
-        {agg.hf && (
-          <button
-            className="chan-chip"
-            data-ok="1"
-            title="在 hf-mirror 网页打开"
-            onClick={() =>
-              api.openUrl(repoWebUrl("hfMirror", rep.repo)).catch(() => {})
-            }
-          >
-            镜像
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function RecCard({ item, onOpen }: { item: RecommendedItem; onOpen: () => void }) {
   const name = item.repo.split("/").pop() ?? item.repo;
@@ -317,7 +218,7 @@ function ModelCard({
 }
 
 export function Discover() {
-  const { config, openDetail, toast } = useStore();
+  const { config, openDetail, toast, sysStats } = useStore();
   const [query, setQuery] = useState(discoverCache.query);
   const [source, setSource] = useState<Source | undefined>(discoverCache.source);
   const [sort, setSort] = useState(discoverCache.sort);
@@ -351,16 +252,7 @@ export function Discover() {
   const [stale, setStale] = useState(false);
   const [recs, setRecs] = useState<RecommendedItem[] | null>(null);
   const [homeTab, setHomeTab] = useState<"rec" | "hot">("rec");
-  const { sysStats } = useStore();
-  const [groupVariants, setGroupVariants] = useState(
-    () => localStorage.getItem("lalalm.groupVariants") !== "0"
-  );
-  const toggleGroup = () => {
-    setGroupVariants((v) => {
-      localStorage.setItem("lalalm.groupVariants", v ? "0" : "1");
-      return !v;
-    });
-  };
+
 
   useEffect(() => {
     api.getRecommended().then(setRecs).catch(() => setRecs([]));
@@ -639,15 +531,6 @@ export function Discover() {
         >
           仅 GGUF
         </button>
-        {query !== "" && (
-          <button
-            className={`chip${groupVariants ? " on" : ""}`}
-            onClick={toggleGroup}
-            title="同一模型的多厂商量化 / 破限 / Raw 版本折叠为一张卡片"
-          >
-            聚合同模型
-          </button>
-        )}
         <div style={{ flex: 1 }} />
         <button
           className="btn-icon"
@@ -696,31 +579,16 @@ export function Discover() {
       )}
 
       {results !== null && results.length > 0 && (
-        <>
-          {groupVariants ? (
-            <div className="model-grid">
-              {groupModels(results).map((g) => (
-                <VariantGroupCard
-                  key={g.key}
-                  group={g}
-                  links={linkMap}
-                  onOpen={(repo, src) => openDetail(repo, src)}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="model-grid">
-              {results.map((m) => (
-                <ModelCard
-                  key={`${m.source}:${m.repo}`}
-                  m={m}
-                  links={linkMap[`${m.source}:${m.repo}`]}
-                  onOpen={() => openDetail(m.repo, m.source)}
-                />
-              ))}
-            </div>
-          )}
-        </>
+        <div className="model-grid">
+          {results.map((m) => (
+            <ModelCard
+              key={`${m.source}:${m.repo}`}
+              m={m}
+              links={linkMap[`${m.source}:${m.repo}`]}
+              onOpen={() => openDetail(m.repo, m.source)}
+            />
+          ))}
+        </div>
       )}
 
       {results === null && !loading && (
